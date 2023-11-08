@@ -1,0 +1,8 @@
+photo_collection: '${hydra:runtime.cwd}/photos_collection'
+masks_folder: '${hydra:runtime.cwd}/masks_collection'
+overlay_folder: '${hydra:runtime.cwd}/overlay_collection'
+processors:
+  - processor_class: Segmenter
+    prefix: 'debris'
+    checkpoint_addr: ${hydra:runtime.cwd}/checkpoints/model.pth
+    classes_names: ['log', 'plastic']
