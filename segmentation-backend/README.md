@@ -7,6 +7,10 @@
 https://yandex.cloud/ru/docs/datasphere/tutorials/node-from-docker
 Действия по настройке из инструкции выполняются один раз
 
+Наш текущий проект с нодами здесь https://datasphere.yandex.cloud/communities/bt1rnjt1276e3aqlfo3e/projects/bt1opovj0dk2pdvbquog
+
+Ноды публикаются через alias, а значит можно спокойно создавать новые ноды, а потом переключать alias на их использования
+
 Здесь описаны действия, которые нужно выполнять каждый раз для создания новой версии
 
 - собирать под linux/amd64:
@@ -21,3 +25,18 @@ https://yandex.cloud/ru/docs/datasphere/tutorials/node-from-docker
 `docker tag garbage-docker cr.yandex/crpdvrl3lmu654l64uq9/garbage:v<x>`,
 `docker push cr.yandex/crpdvrl3lmu654l64uq9/garbage:v<x>`, где вместо <x> подставить номер версии.
 Здесь `crpdvrl3lmu654l64uq9` - ID нашего реестра, `garbage:v<x>` - произвольной название + тег, может быть любым
+
+После этого нужно создать новую ноду из нового Docker-образа
+
+Порт нужно указывать такой же, какой в server.py (8000)
+Лучше ставить большой таймаут, например, 600 секунд
+
+Ручки для health check-a и телеметрии пока не сделал 
+
+
+После создания ноды нужно переключить alias datasphere.user.segmentation-backend на использование новой ноды
+
+
+
+Протестировать работу сервера удобно с помощью тестового клиента
+`test_client.py`. Там можно выбрать между localhost-ом и alias-ом в датасфере

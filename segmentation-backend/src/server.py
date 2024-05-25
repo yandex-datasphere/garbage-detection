@@ -11,6 +11,7 @@ from skimage.util.shape import view_as_windows
 import atexit
 from apscheduler.schedulers.background import BackgroundScheduler
 
+import scipy.ndimage as ndimage
 import os
 from flask import Flask, flash, request, redirect, send_file, Response
 from threading import Lock
@@ -131,6 +132,7 @@ loaded_model = SegformerForSemanticSegmentation.from_pretrained(MODEL_CHECKPOINT
 loaded_model.load_state_dict(torch.load(model_path, map_location=device))
 loaded_model = loaded_model.to(device)
 
+
 # Параллельное предсказание, работает только на больших GPU
 # def predict(batch):
 #     images = []
@@ -190,7 +192,7 @@ def predict(batch):
         for label, color in id2color.items():
             color_seg[seg == label, :] = color
 
-        img = batch[i] * 0.8 + color_seg * 0.2
+        img = batch[i] * 0.7 + color_seg * 0.3
         img = img.astype(np.uint8)
         batch_images.append(img)
 
@@ -289,41 +291,64 @@ def stride_conv_strided(arr, arr2, s):
     return np.tensordot(arr4D, arr2, axes=((2, 3), (0, 1)))
 
 
+def separate_objects_masks(mask):
+    """
+    mask: должна содержать только значиния 0 и 255,
+    h x w x 3, все 3 канала одинаково заполнены
+    """
+    res = []
+
+    label_im, nb_labels = ndimage.label(mask)
+
+    for i in range(nb_labels):
+        mask = label_im == i + 1
+        if np.sum(mask) < 80:  # filter small objects
+            continue
+        res.append(mask)
+    return res
+
+
 def calc_coefs(mask, cl):
-    v = mask == cl
-    square_in_pixels = np.sum(v)
+    coefs = []
+    cl_mask = mask == cl
 
-    if square_in_pixels == 0:
-        return 0, 0, 0
+    masks = separate_objects_masks(cl_mask)
+    for v in masks:
+        mass_y, mass_x = np.where(v)
+        cent_y = np.average(mass_y)
+        cent_x = np.average(mass_x)
 
-    size = 4
-    kernel = np.ones((size, size))
-    denom = size * size
+        square_in_pixels = np.sum(v)
 
-    squares = stride_conv_strided(v, kernel, s=size) / denom
+        size = 4
+        kernel = np.ones((size, size))
+        denom = size * size
 
-    max_window = cl_to_max_window[cl]
-    k = max_window - 1
+        squares = stride_conv_strided(v, kernel, s=size) / denom
 
-    padded = np.pad(squares, [(k, k), (k, k)], mode='constant', constant_values=0)
+        max_window = cl_to_max_window[cl]
+        k = max_window - 1
 
-    kernel_hor = np.array([[1.0] * max_window])
-    kernel_vert = np.array([[1.0]] * max_window)
+        padded = np.pad(squares, [(k, k), (k, k)], mode='constant', constant_values=0)
 
-    hor = stride_conv_strided(padded, kernel_hor, s=1)
-    vert = stride_conv_strided(padded, kernel_vert, s=1)
+        kernel_hor = np.array([[1.0] * max_window])
+        kernel_vert = np.array([[1.0]] * max_window)
 
-    l = hor[k:-k, :-k]
-    r = hor[k:-k, k:]
-    up = vert[:-k, k:-k]
-    down = vert[k:, k:-k]
+        hor = stride_conv_strided(padded, kernel_hor, s=1)
+        vert = stride_conv_strided(padded, kernel_vert, s=1)
 
-    res = np.stack([l, r, up, down]).min(axis=0)
+        l = hor[k:-k, :-k]
+        r = hor[k:-k, k:]
+        up = vert[:-k, k:-k]
+        down = vert[k:, k:-k]
 
-    volume_coef = np.sum(res) / np.sum(squares)
-    mass_coef = cl_to_density[cl] * volume_coef
+        res = np.stack([l, r, up, down]).min(axis=0)
 
-    return square_in_pixels, volume_coef, mass_coef
+        volume_coef = np.sum(res) / np.sum(squares)
+        mass_coef = cl_to_density[cl] * volume_coef
+        coefs.append([int(cent_y), int(cent_x), square_in_pixels, volume_coef, mass_coef])
+
+    return coefs
 
 
 def delete_files_in_dir(path):
