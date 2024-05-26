@@ -272,13 +272,31 @@ cl_to_max_window = {
     6: 3,
 }
 
+cl_to_volume_decreasing_coef = {
+    1: 0.05,
+    2: 0.25,
+    3: 0.2,
+    4: 0.25,
+    5: 1,
+    6: 0.1,
+}
+
+cl_to_name = {
+    1: "железо",
+    2: "рыболовные снасти",
+    3: "пластик",
+    4: "дерево",
+    5: "бетон",
+    6: "резина"
+}
+
 cl_to_density = {
-    1: 8000,
-    2: 800,
-    3: 400,  # может быть и легче, но мне кажется, что он обычно моркый и тяжелый
-    4: 900,  # так как чаще всего мокрое
-    5: 2600,
-    6: 2000,
+    1: 4000,
+    2: 200,
+    3: 200,  # может быть и легче, но мне кажется, что он обычно моркый и тяжелый
+    4: 300,
+    5: 1300,
+    6: 1300,
 }
 
 
@@ -344,7 +362,7 @@ def calc_coefs(mask, cl):
 
         res = np.stack([l, r, up, down]).min(axis=0)
 
-        volume_coef = np.sum(res) / np.sum(squares)
+        volume_coef = cl_to_volume_decreasing_coef[cl] * np.sum(res) / np.sum(squares)
         mass_coef = cl_to_density[cl] * volume_coef
         coefs.append([int(cent_y), int(cent_x), square_in_pixels, volume_coef, mass_coef])
 
