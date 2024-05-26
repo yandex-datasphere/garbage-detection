@@ -147,7 +147,7 @@ def get_corner_points(center_lon, center_lat, altitude, dir_angle, pitch, aspect
     # calculations based on photogrammetry tutorial
     ratXh = sensor_width / focal_length / 2  # ratio of sensor half-width to focal length (at image centre)
     ratYh = aspect * ratXh  # ditto for sensor half-height
-    ccf = math.sqrt(1 + (
+    ccf = 1.5 * math.sqrt(1 + (
             ratYh ** 2))  # "corner correction factor" due to sensor crop and fisheye correction. For 0.75 aspect this becomes 1.13, but needs to be calibrated for each camera!
     phiXh, phiYh = math.atan(ratXh), math.atan(
         ratYh)  # 1/2-FOV angle in X,Y directions at image centre. Will be in radians.
@@ -286,6 +286,11 @@ def georeference_img(file_in, processed_path, add_points, add_raster):
                 f.write(f"{x_br}\n")
                 f.write(f"{y_br}")
 
+            with open('C:\\Users\\user\\Downloads\\litter_map_1.1\\log.txt', 'a') as f:
+                f.write("jgw\n")
+                f.write(f"{x_br}, {y_br}, {ground_pixel_width}, {ground_pixel_length}")
+                f.flush()
+
             if add_raster:
                 r_layer = QgsRasterLayer(processed_path, os.path.basename(processed_path))
                 r_layer.setCrs(crs_degrees)
@@ -364,7 +369,7 @@ class LitterMapDialog(QWidget):
         msg.warning(self, "Уведомление", err_text)
         return
 
-    def process_image(self, image_path):
+    def process_image(self, image_path, processed_dir_path):
         url = "https://node-api.datasphere.yandexcloud.net/process"
         headers = {
             "x-node-alias": "datasphere.user.segmentation-backend",
@@ -377,7 +382,8 @@ class LitterMapDialog(QWidget):
         if response.status_code == 400:
             print(response.text)
         else:
-            processed_path = image_path.replace('.JPG', '') + "_processed.JPG"
+            base_name = os.path.basename(image_path)
+            processed_path = os.path.join(processed_dir_path, base_name)
             save_file = open(processed_path, "wb")
             save_file.write(response.content)
             save_file.close()
@@ -425,10 +431,17 @@ class LitterMapDialog(QWidget):
         frame_intersection = None
 
         pic_coors = add_tech_layer('NN_points', 'Point')
-        pic_coors_heatmap = add_tech_layer('NN_points_heatmap', 'Point')
+        # pic_coors_heatmap = add_tech_layer('NN_points_heatmap', 'Point')
+
+        dirpath = os.path.dirname(os.path.abspath(images[0]))
+        processed_dir = dirpath + "/processed"
+        try:
+            os.makedirs(processed_dir)
+        except:
+            pass
 
         for file_in in images:
-            processed_path, cl_to_coefs = self.process_image(file_in)
+            processed_path, cl_to_coefs = self.process_image(file_in, processed_dir_path=processed_dir)
 
             A, B, D, E, C, F, iw, ih = georeference_img(file_in, processed_path, True, True)
             polygon_coors = img_frame(A, B, D, E, C, F, iw, ih)
@@ -492,7 +505,7 @@ class LitterMapDialog(QWidget):
 
                     r_feature.setGeometry(pnt)
                     pic_coors.dataProvider().addFeatures([r_feature])
-                    pic_coors_heatmap.dataProvider().addFeatures([r_feature])
+                    # pic_coors_heatmap.dataProvider().addFeatures([r_feature])
             if not all_frame:
                 all_frame = polygon_coors
             else:
@@ -548,9 +561,9 @@ class LitterMapDialog(QWidget):
         # ]
 
         QgsProject.instance().addMapLayer(pic_coors)
-        QgsProject.instance().addMapLayer(pic_coors_heatmap)
+        # QgsProject.instance().addMapLayer(pic_coors_heatmap)
         pic_coors.loadNamedStyle(classes_style)
-        pic_coors_heatmap.loadNamedStyle(heatmap_style)
+        # pic_coors_heatmap.loadNamedStyle(heatmap_style)
         # self.btn_save_stat.setDisabled(False)
         self.prog_bar.setValue(0)
 
