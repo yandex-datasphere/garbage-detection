@@ -69,7 +69,7 @@ def process():
 
     print("Image opened")
     try:
-        res_image, res_mask, cl_coefs = predict_full(image)
+        res_image, res_mask, cl_coefs = predict_full(image, h=1024, w=1024, stride=512)
     except Exception as e:
         print(traceback.format_exc())
 
@@ -89,10 +89,6 @@ def process():
 
 MODEL_CHECKPOINT = 'nvidia/mit-b2'
 model_path = "model.pt"
-
-h = 512
-w = 512
-stride = 512
 
 id2label = {
     0: "background",
@@ -121,6 +117,7 @@ id2color = {x: y for x, y in palette.items()}
 image_processor = SegformerImageProcessor.from_pretrained(MODEL_CHECKPOINT)
 image_processor.do_reduce_labels = False
 image_processor.reduce_labels = False
+image_processor.size = {'height': 1024, 'width': 1024}
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -158,13 +155,13 @@ loaded_model = loaded_model.to(device)
 #         for label, color in id2color.items():
 #             color_seg[seg == label, :] = color
 #
-#         img = batch[i] * 0.8 + color_seg * 0.2
+#         img = batch[i] * 0.7 + color_seg * 0.3
 #         img = img.astype(np.uint8)
 #         batch_images.append(img)
 #
 #     return batch_seg, batch_images
 
-
+#
 def predict(batch):
     images = []
     for image in batch:
@@ -199,7 +196,7 @@ def predict(batch):
     return batch_seg, batch_images
 
 
-def predict_full(image):
+def predict_full(image, h=512, w=512, stride=512):
     arr = np.array(image)
     img = arr
     # img = arr[:define_nearest_crop(arr.shape[0]), :define_nearest_crop(arr.shape[1]), ...]
@@ -207,17 +204,21 @@ def predict_full(image):
     height = img.shape[0]
     width = img.shape[1]
 
-    n = 1
-    if height % stride == 0:
-        n = height // stride
+    if height <= h:
+        n = 1
     else:
-        n = height // stride + 1
+        if (height - h) % stride == 0:
+            n = (height - h) // stride + 1
+        else:
+            n = (height - h) // stride + 2
 
-    m = 1
-    if width % stride == 0:
-        m = width // stride
+    if width <= w:
+        m = 1
     else:
-        m = width // stride + 1
+        if (width - w) % stride == 0:
+            m = (width - w) // stride + 1
+        else:
+            m = (width - w) // stride + 2
 
     n_m = n * m
 
@@ -273,12 +274,12 @@ cl_to_max_window = {
 }
 
 cl_to_volume_decreasing_coef = {
-    1: 0.05,
-    2: 0.25,
-    3: 0.2,
-    4: 0.25,
-    5: 1,
-    6: 0.1,
+    1: 0.025,
+    2: 0.125,
+    3: 0.1,
+    4: 0.125,
+    5: 0.5,
+    6: 0.05,
 }
 
 cl_to_name = {
@@ -291,12 +292,12 @@ cl_to_name = {
 }
 
 cl_to_density = {
-    1: 4000,
-    2: 200,
-    3: 200,  # может быть и легче, но мне кажется, что он обычно моркый и тяжелый
-    4: 300,
-    5: 1300,
-    6: 1300,
+    1: 2000,
+    2: 100,
+    3: 100,  # может быть и легче, но мне кажется, что он обычно моркый и тяжелый
+    4: 200,
+    5: 700,
+    6: 700,
 }
 
 
@@ -386,11 +387,11 @@ def clear_dirs():
 
 
 if __name__ == "__main__":
+    loaded_model.eval()
+
     scheduler = BackgroundScheduler()
     scheduler.add_job(func=clear_dirs, trigger="interval", seconds=60 * 60)
     scheduler.start()
-
-    loaded_model.eval()
 
     # Shut down the scheduler when exiting the app
     atexit.register(lambda: scheduler.shutdown())
