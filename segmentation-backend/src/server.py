@@ -390,6 +390,8 @@ if __name__ == "__main__":
     scheduler.add_job(func=clear_dirs, trigger="interval", seconds=60 * 60)
     scheduler.start()
 
+    loaded_model.eval()
+
     # Shut down the scheduler when exiting the app
     atexit.register(lambda: scheduler.shutdown())
 
