@@ -202,20 +202,11 @@ def get_corner_points(center_lon, center_lat, altitude, dir_angle, pitch, aspect
 
 def georeference_img(file_in, processed_path, add_points, add_raster):
     # make a georeference for an image
-    with open('C:\\Users\\user\\Downloads\\litter_map_1.1\\log.txt', 'w') as f:
-        f.write("lol\n")
+    
 
     file_jgw = os.path.join(os.path.dirname(processed_path), os.path.basename(processed_path).replace('JPG', 'jgw'))
 
-    with open('C:\\Users\\user\\Downloads\\litter_map_1.1\\log.txt', 'a') as f:
-        f.write(file_jgw)
-        f.write("\n")
-
     with ExifToolHelper(executable=exiftool_exe) as et:
-        with open('C:\\Users\\user\\Downloads\\litter_map_1.1\\log.txt', 'a') as f:
-            f.write("here\n")
-            f.write(f"len of metadata: {et.get_metadata(file_in)}\n")
-            f.flush()
         for d in et.get_metadata(file_in):
             # get image data
             lat = float(d['Composite:GPSLatitude'])
@@ -285,11 +276,6 @@ def georeference_img(file_in, processed_path, add_points, add_raster):
                 f.write(f"{E:1.10f}\n")
                 f.write(f"{x_br}\n")
                 f.write(f"{y_br}")
-
-            with open('C:\\Users\\user\\Downloads\\litter_map_1.1\\log.txt', 'a') as f:
-                f.write("jgw\n")
-                f.write(f"{x_br}, {y_br}, {ground_pixel_width}, {ground_pixel_length}")
-                f.flush()
 
             if add_raster:
                 r_layer = QgsRasterLayer(processed_path, os.path.basename(processed_path))
