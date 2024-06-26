@@ -219,9 +219,6 @@ def georeference_img(file_in, processed_path, add_points, add_raster):
             img_width = int(d['EXIF:ExifImageWidth'])
             img_height = int(d['EXIF:ExifImageHeight'])
 
-            with open('C:\\Users\\user\\Downloads\\litter_map_1.1\\log.txt', 'a') as f:
-                f.write(f"w, h: {img_width}, {img_height}\n")
-
             # calculate auxiliary data
             sensor_width = 2 * (focal_length_value * math.tan((0.5 * float(d['Composite:FOV'])) / 57.296))
             sensor_height = img_height / img_width * sensor_width
