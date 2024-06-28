@@ -495,7 +495,7 @@ class LitterMapDialog(QWidget):
                 all_frame = all_frame.combine(polygon_coors)
 
             step_count += step
-            self.prog_bar.setValue(step_count)
+            self.prog_bar.setValue(int(step_count))
             QtCore.QCoreApplication.processEvents()
 
         for t in stat_litter_classes:
