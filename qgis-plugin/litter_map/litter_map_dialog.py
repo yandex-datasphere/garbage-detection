@@ -25,6 +25,8 @@
 import os
 import boto3
 from botocore.exceptions import NoCredentialsError, ClientError
+import logging
+from datetime import datetime
 
 from qgis.PyQt import uic
 from qgis.PyQt import QtWidgets
@@ -69,6 +71,32 @@ heatmap_style = os.path.join(current_folder, r"heatmap_style.qml")
 #exiftool_exe = os.path.join(current_folder, r"tools\exiftool.exe")
 exiftool_exe = r"C:\Users\Administrator\Desktop\garbage-detection-dev\qgis-plugin\litter_map\tools\exiftool.exe"
 
+# Настройка логирования
+def setup_logging():
+    # Создаем директорию для логов, если её нет
+    log_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'logs')
+    if not os.path.exists(log_dir):
+        os.makedirs(log_dir)
+    
+    # Создаем имя файла с текущей датой
+    log_file = os.path.join(log_dir, f'litter_map_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log')
+    
+    # Настраиваем логирование
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(log_file, encoding='utf-8'),
+            logging.StreamHandler()  # Также выводим в консоль
+        ]
+    )
+    return log_file
+
+# Инициализируем логирование при импорте модуля
+log_file = setup_logging()
+logging.info(f"Starting LitterMap plugin")
+logging.info(f"Python version: {sys.version}")
+logging.info(f"QGIS version: {QgsApplication.QGIS_VERSION}")
 
 def extract_polygon(coors, coef_data):
     A, B, D, E, C, F = coef_data
@@ -204,99 +232,172 @@ def get_corner_points(center_lon, center_lat, altitude, dir_angle, pitch, aspect
 
 
 def georeference_img(file_in, processed_path, add_points, add_raster):
-    # make a georeference for an image
-    
+    try:
+        logging.info(f"Processing image: {file_in}")
+        file_jgw = os.path.join(os.path.dirname(processed_path), os.path.basename(processed_path).replace('JPG', 'jgw'))
 
-    file_jgw = os.path.join(os.path.dirname(processed_path), os.path.basename(processed_path).replace('JPG', 'jgw'))
+        if not os.path.exists(exiftool_exe):
+            logging.error(f"ExifTool not found at: {exiftool_exe}")
+            return None
 
-    with ExifToolHelper(executable=exiftool_exe) as et:
-        for d in et.get_metadata(file_in):
-            # get image data
-            lat = float(d['Composite:GPSLatitude'])
-            lon = float(d['Composite:GPSLongitude'])
-            altitude_value = float(d['XMP:RelativeAltitude'])
-            pitch_value = float(d['XMP:GimbalPitchDegree']) / 180 * math.pi
-            dir_spin_value = (90 + float(d['XMP:FlightYawDegree'])) / 180 * math.pi
-            dir_init_value = float(d['XMP:FlightYawDegree'])
-            focal_length_value = float(d['EXIF:FocalLength']) / 1000
-            img_width = int(d['EXIF:ExifImageWidth'])
-            img_height = int(d['EXIF:ExifImageHeight'])
+        with ExifToolHelper(executable=exiftool_exe) as et:
+            metadata = et.get_metadata(file_in)
+            if not metadata:
+                logging.error(f"No EXIF metadata found in {file_in}")
+                return None
+            
+            d = metadata[0]
+            logging.debug(f"EXIF data: {d}")
+            
+            # List of required EXIF tags
+            required_tags = {
+                'Composite:GPSLatitude': 'GPS координаты (широта)',
+                'Composite:GPSLongitude': 'GPS координаты (долгота)',
+                'XMP:RelativeAltitude': 'Относительная высота',
+                'XMP:GimbalPitchDegree': 'Угол наклона камеры',
+                'XMP:FlightYawDegree': 'Курс дрона',
+                'EXIF:FocalLength': 'Фокусное расстояние',
+                'EXIF:ExifImageWidth': 'Ширина изображения',
+                'EXIF:ExifImageHeight': 'Высота изображения',
+                'Composite:FOV': 'Поле зрения камеры'
+            }
+            
+            # Check for missing tags
+            missing_tags = []
+            for tag, description in required_tags.items():
+                if tag not in d:
+                    missing_tags.append(f"{description} ({tag})")
+            
+            if missing_tags:
+                logging.error(f"Missing EXIF tags in {file_in}:")
+                for tag in missing_tags:
+                    logging.error(f"- {tag}")
+                return None
 
-            # calculate auxiliary data
-            sensor_width = 2 * (focal_length_value * math.tan((0.5 * float(d['Composite:FOV'])) / 57.296))
-            sensor_height = img_height / img_width * sensor_width
-            sensor_width_deg, sensor_height_deg = meter2Degree(lat, sensor_width, sensor_height)
-            aspect = img_width / img_height
-            scale_factor = altitude_value / focal_length_value
-            sensor_pixel_width_degrees = sensor_width_deg / img_width
-            sensor_pixel_length_degrees = sensor_height_deg / img_height
-            img_hwidth_degrees = (sensor_width_deg * scale_factor) / 2
-            img_hlength_degrees = (sensor_height_deg * scale_factor) / 2
-            ground_pixel_width = sensor_pixel_width_degrees * scale_factor
-            ground_pixel_length = sensor_pixel_length_degrees * scale_factor
+            try:
+                # get image data
+                lat = float(d['Composite:GPSLatitude'])
+                lon = float(d['Composite:GPSLongitude'])
+                altitude_value = float(d['XMP:RelativeAltitude'])
+                pitch_value = float(d['XMP:GimbalPitchDegree']) / 180 * math.pi
+                dir_spin_value = (90 + float(d['XMP:FlightYawDegree'])) / 180 * math.pi
+                dir_init_value = float(d['XMP:FlightYawDegree'])
+                focal_length_value = float(d['EXIF:FocalLength']) / 1000
+                img_width = int(d['EXIF:ExifImageWidth'])
+                img_height = int(d['EXIF:ExifImageHeight'])
 
-            # points calculations
-            # center point
-            pnt_orig = QgsGeometry().fromPointXY(QgsPointXY(lon, lat))
-            pnt = QgsGeometry().fromPointXY(QgsPointXY(lon, lat))
-            pnt.transform(tr_to_meters)
-            lon_m, lat_m = pnt.asPoint().x(), pnt.asPoint().y()
+                logging.debug(f"Image dimensions: {img_width}x{img_height}")
+                logging.debug(f"GPS coordinates: {lat}, {lon}")
+                logging.debug(f"Altitude: {altitude_value}")
+                logging.debug(f"Pitch: {pitch_value}")
+                logging.debug(f"Direction: {dir_init_value}")
 
-            # get corner points
-            pntTL, pntTR, pntBL, pntBR = get_corner_points(
-                center_lon=lon_m,
-                center_lat=lat_m,
-                altitude=altitude_value,
-                dir_angle=dir_spin_value,
-                pitch=pitch_value,
-                aspect=aspect,
-                sensor_width=sensor_width,
-                focal_length=focal_length_value
-            )
+                # calculate auxiliary data
+                sensor_width = 2 * (focal_length_value * math.tan((0.5 * float(d['Composite:FOV'])) / 57.296))
+                sensor_height = img_height / img_width * sensor_width
+                sensor_width_deg, sensor_height_deg = meter2Degree(lat, sensor_width, sensor_height)
+                aspect = img_width / img_height
+                scale_factor = altitude_value / focal_length_value
+                sensor_pixel_width_degrees = sensor_width_deg / img_width
+                sensor_pixel_length_degrees = sensor_height_deg / img_height
+                img_hwidth_degrees = (sensor_width_deg * scale_factor) / 2
+                img_hlength_degrees = (sensor_height_deg * scale_factor) / 2
+                ground_pixel_width = sensor_pixel_width_degrees * scale_factor
+                ground_pixel_length = sensor_pixel_length_degrees * scale_factor
 
-            # get corners' x and y
-            x_tl, y_tl = pntTL.asPoint().x(), pntTL.asPoint().y()
-            x_tr, y_tr = pntTR.asPoint().x(), pntTR.asPoint().y()
-            x_bl, y_bl = pntBL.asPoint().x(), pntBL.asPoint().y()
-            x_br, y_br = pntBR.asPoint().x(), pntBR.asPoint().y()
+                logging.debug(f"Calculated parameters:")
+                logging.debug(f"- Sensor width: {sensor_width}")
+                logging.debug(f"- Sensor height: {sensor_height}")
+                logging.debug(f"- Scale factor: {scale_factor}")
+                logging.debug(f"- Ground pixel width: {ground_pixel_width}")
+                logging.debug(f"- Ground pixel length: {ground_pixel_length}")
 
-            # calcuilate ABDE coefficients
-            A = math.cos(math.radians(dir_init_value)) * ground_pixel_width
-            B = -(math.sin(math.radians(dir_init_value)) * ground_pixel_length)
-            D = -(math.sin(math.radians(dir_init_value)) * ground_pixel_width)
-            E = -(math.cos(math.radians(dir_init_value)) * ground_pixel_length)
+                # points calculations
+                pnt_orig = QgsGeometry().fromPointXY(QgsPointXY(lon, lat))
+                pnt = QgsGeometry().fromPointXY(QgsPointXY(lon, lat))
+                pnt.transform(tr_to_meters)
+                lon_m, lat_m = pnt.asPoint().x(), pnt.asPoint().y()
 
-            C, F = x_br, y_br
+                logging.debug(f"Transformed coordinates: {lon_m}, {lat_m}")
 
-            # write world file
-            with open(file_jgw, 'w') as f:
-                f.write(f"{A:1.10f}\n")  # A
-                f.write(f"{B:1.10f}\n")  # D
-                f.write(f"{D:1.10f}\n")  #
-                f.write(f"{E:1.10f}\n")
-                f.write(f"{x_br}\n")
-                f.write(f"{y_br}")
+                # get corner points
+                pntTL, pntTR, pntBL, pntBR = get_corner_points(
+                    center_lon=lon_m,
+                    center_lat=lat_m,
+                    altitude=altitude_value,
+                    dir_angle=dir_spin_value,
+                    pitch=pitch_value,
+                    aspect=aspect,
+                    sensor_width=sensor_width,
+                    focal_length=focal_length_value
+                )
 
-            if add_raster:
-                r_layer = QgsRasterLayer(processed_path, os.path.basename(processed_path))
-                r_layer.setCrs(crs_degrees)
-                QgsProject.instance().addMapLayer(r_layer)
-                provider = r_layer.dataProvider()
-                provider.setNoDataValue(1, 0)  # remove black value
-                r_layer.triggerRepaint()
-                l_id = QgsProject.instance().layerTreeRoot().findLayer(r_layer.id())
-                # l_id.setItemVisibilityChecked(False)
-                l_id.setExpanded(False)
-            if add_points:
-                new_layer = add_tech_layer("PNTS", 'Point')
-                for g in [pnt_orig, pntTL, pntTR, pntBL, pntBR]:
-                    r_feature = QgsFeature()
-                    r_feature.setFields(new_layer.fields())
-                    r_feature.setGeometry(g)
-                    new_layer.dataProvider().addFeatures([r_feature])
-                QgsProject.instance().addMapLayer(new_layer)
-                # print(A, D, B, E, C, F, img_width, img_height)
-            return A, D, B, E, C, F, img_width, img_height
+                # get corners' x and y
+                x_tl, y_tl = pntTL.asPoint().x(), pntTL.asPoint().y()
+                x_tr, y_tr = pntTR.asPoint().x(), pntTR.asPoint().y()
+                x_bl, y_bl = pntBL.asPoint().x(), pntBL.asPoint().y()
+                x_br, y_br = pntBR.asPoint().x(), pntBR.asPoint().y()
+
+                logging.debug(f"Corner points:")
+                logging.debug(f"TL: ({x_tl}, {y_tl})")
+                logging.debug(f"TR: ({x_tr}, {y_tr})")
+                logging.debug(f"BL: ({x_bl}, {y_bl})")
+                logging.debug(f"BR: ({x_br}, {y_br})")
+
+                # calculate ABDE coefficients
+                A = math.cos(math.radians(dir_init_value)) * ground_pixel_width
+                B = -(math.sin(math.radians(dir_init_value)) * ground_pixel_length)
+                D = -(math.sin(math.radians(dir_init_value)) * ground_pixel_width)
+                E = -(math.cos(math.radians(dir_init_value)) * ground_pixel_length)
+
+                C, F = x_br, y_br
+
+                logging.debug(f"Final coefficients:")
+                logging.debug(f"A: {A}")
+                logging.debug(f"B: {B}")
+                logging.debug(f"D: {D}")
+                logging.debug(f"E: {E}")
+                logging.debug(f"C: {C}")
+                logging.debug(f"F: {F}")
+
+                # write world file
+                with open(file_jgw, 'w') as f:
+                    f.write(f"{A:1.10f}\n")  # A
+                    f.write(f"{B:1.10f}\n")  # D
+                    f.write(f"{D:1.10f}\n")  #
+                    f.write(f"{E:1.10f}\n")
+                    f.write(f"{x_br}\n")
+                    f.write(f"{y_br}")
+
+                if add_raster:
+                    r_layer = QgsRasterLayer(processed_path, os.path.basename(processed_path))
+                    r_layer.setCrs(crs_degrees)
+                    QgsProject.instance().addMapLayer(r_layer)
+                    provider = r_layer.dataProvider()
+                    provider.setNoDataValue(1, 0)  # remove black value
+                    r_layer.triggerRepaint()
+                    l_id = QgsProject.instance().layerTreeRoot().findLayer(r_layer.id())
+                    l_id.setExpanded(False)
+
+                if add_points:
+                    new_layer = add_tech_layer("PNTS", 'Point')
+                    for g in [pnt_orig, pntTL, pntTR, pntBL, pntBR]:
+                        r_feature = QgsFeature()
+                        r_feature.setFields(new_layer.fields())
+                        r_feature.setGeometry(g)
+                        new_layer.dataProvider().addFeatures([r_feature])
+                    QgsProject.instance().addMapLayer(new_layer)
+
+                logging.info(f"Successfully processed image: {file_in}")
+                return A, B, D, E, C, F, img_width, img_height
+
+            except ValueError as e:
+                logging.error(f"Invalid EXIF data values in {file_in}: {str(e)}")
+                return None
+
+    except Exception as e:
+        logging.error(f"Error processing image {file_in}: {str(e)}", exc_info=True)
+        return None
 
 
 class LitterMapDialog(QWidget):
