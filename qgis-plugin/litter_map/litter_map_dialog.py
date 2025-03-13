@@ -66,7 +66,8 @@ tr_to_degrees = QgsCoordinateTransform(crs_metric, crs_degrees, QgsProject.insta
 current_folder = os.path.dirname(os.path.realpath(__file__))
 classes_style = os.path.join(current_folder, r"classes_style.qml")
 heatmap_style = os.path.join(current_folder, r"heatmap_style.qml")
-exiftool_exe = os.path.join(current_folder, r"tools\exiftool.exe")
+#exiftool_exe = os.path.join(current_folder, r"tools\exiftool.exe")
+exiftool_exe = r"C:\Users\Administrator\Desktop\garbage-detection-dev\qgis-plugin\litter_map\tools\exiftool.exe"
 
 
 def extract_polygon(coors, coef_data):
