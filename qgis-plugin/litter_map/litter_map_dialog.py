@@ -23,6 +23,8 @@
 """
 
 import os
+import boto3
+from botocore.exceptions import NoCredentialsError, ClientError
 
 from qgis.PyQt import uic
 from qgis.PyQt import QtWidgets
@@ -371,6 +373,33 @@ class LitterMapDialog(QWidget):
             save_file.write(response.content)
             save_file.close()
 
+            # Upload to Yandex Storage
+            access_key = 'YCAJEx_tO4BLa7mIZG8FJB00p'
+            secret_key = 'YCOIINmv-D_Nb6U53VsoBJEZ87K4eOH4ZU7mMxQm'
+            bucket_name = 'yngcook'
+            endpoint_url = 'https://storage.yandexcloud.net'
+            object_name = f'processed/{base_name}'  # Store in processed/ subfolder
+
+            session = boto3.session.Session()
+            s3 = session.client(
+                service_name='s3',
+                endpoint_url=endpoint_url,
+                aws_access_key_id=access_key,
+                aws_secret_access_key=secret_key,
+                region_name='ru-central1'
+            )
+
+            try:
+                s3.upload_file(
+                    Filename=processed_path,
+                    Bucket=bucket_name,
+                    Key=object_name,
+                    ExtraArgs={'ACL': 'public-read'}
+                )
+                print(f"Successfully uploaded {object_name} to Yandex Storage")
+            except Exception as e:
+                print(f"Error uploading to Yandex Storage: {str(e)}")
+
             cl_coefs_str = response.cookies.get("cl_coefs").replace("\\054", ",")[1:-1]
             cl_coefs = ast.literal_eval(cl_coefs_str)
         return processed_path, cl_coefs
@@ -387,8 +416,13 @@ class LitterMapDialog(QWidget):
         stat_litter_area = 0
         stat_litter_volume = 0
         stat_litter_mass = 0
-        # x_length = 0
-        # y_length = 0
+
+        # Create CSV file for garbage points
+        dirpath = os.path.dirname(os.path.abspath(images[0]))
+        csv_path = os.path.join(dirpath, "garbage_points.csv")
+        with open(csv_path, mode='w', encoding='utf-8', newline='') as csv_file:
+            csv_writer = csv.writer(csv_file, delimiter=';')
+            csv_writer.writerow(['Тип мусора', 'Широта', 'Долгота', 'Площадь (кв.м)', 'Объем (куб.м)', 'Масса (кг)'])
 
         cl_to_name = {
             1: "железо",
@@ -488,6 +522,19 @@ class LitterMapDialog(QWidget):
 
                     r_feature.setGeometry(pnt)
                     pic_coors.dataProvider().addFeatures([r_feature])
+
+                    # Save point data to CSV
+                    with open(csv_path, mode='a', encoding='utf-8', newline='') as csv_file:
+                        csv_writer = csv.writer(csv_file, delimiter=';')
+                        csv_writer.writerow([
+                            type_pnt,
+                            f"{y_cor:.6f}",
+                            f"{x_cor:.6f}",
+                            f"{area:.3f}",
+                            f"{volume:.3f}",
+                            f"{mass:.3f}"
+                        ])
+
                     # pic_coors_heatmap.dataProvider().addFeatures([r_feature])
             if not all_frame:
                 all_frame = polygon_coors
@@ -521,27 +568,32 @@ class LitterMapDialog(QWidget):
         stat_msg += f"Центроид участка - ({c_x}, {c_y})\n"
         self.txt_area.setPlainText(stat_msg)
 
-        # self.stat_data = [
-        #     ['Тип мусора', 'Количество, ед.', 'Площадь, кв.м.']
-        # ]
-        # for cl in cl_to_name.keys():
-        #
-        # self.stat_data = [
-        #     ['Тип мусора', 'Количество, ед.', 'Площадь, кв.м.'],
-        #     ['железо', stat_litter_classes['железо']['num'], stat_litter_classes['железо']['area']],
-        #     ['рыболовные снасти', stat_litter_classes['рыболовные снасти']['num'],
-        #      stat_litter_classes['рыболовные снасти']['area']],
-        #     ['пластик', stat_litter_classes['пластик']['num'], stat_litter_classes['пластик']['area']],
-        #     ['дерево', stat_litter_classes['дерево']['num'], stat_litter_classes['дерево']['area']],
-        #     ['бетон', stat_litter_classes['бетон']['num'], stat_litter_classes['бетон']['area']],
-        #     ['резина', stat_litter_classes['резина']['num'], stat_litter_classes['резина']['area']],
-        #     ['Итого', '', ''],
-        #     ["Общее количество мусора, ед.", stat_litter_count, ''],
-        #     ["Общая площадь мусора, кв. м.", stat_litter_area, ''],
-        #     ["Общая площадь участка, кв. м.", round(all_frame.area(), 2), ''],
-        #     ["Центроид участка", '({}, {})'.format(c_x, c_y), ''],
-        #     ["Пространственное разрешение, см", '{} x {}'.format(x_length, y_length), '']
-        # ]
+        # Upload CSV file to Yandex Storage
+        access_key = 'YCAJEx_tO4BLa7mIZG8FJB00p'
+        secret_key = 'YCOIINmv-D_Nb6U53VsoBJEZ87K4eOH4ZU7mMxQm'
+        bucket_name = 'yngcook'
+        endpoint_url = 'https://storage.yandexcloud.net'
+        csv_object_name = f'data/garbage_points.csv'  # Store in data/ subfolder
+
+        session = boto3.session.Session()
+        s3 = session.client(
+            service_name='s3',
+            endpoint_url=endpoint_url,
+            aws_access_key_id=access_key,
+            aws_secret_access_key=secret_key,
+            region_name='ru-central1'
+        )
+
+        try:
+            s3.upload_file(
+                Filename=csv_path,
+                Bucket=bucket_name,
+                Key=csv_object_name,
+                ExtraArgs={'ACL': 'public-read'}
+            )
+            print(f"Successfully uploaded {csv_object_name} to Yandex Storage")
+        except Exception as e:
+            print(f"Error uploading CSV to Yandex Storage: {str(e)}")
 
         QgsProject.instance().addMapLayer(pic_coors)
         # QgsProject.instance().addMapLayer(pic_coors_heatmap)
