@@ -73,30 +73,36 @@ exiftool_exe = r"C:\Users\Administrator\Desktop\garbage-detection-dev\qgis-plugi
 
 # Настройка логирования
 def setup_logging():
-    # Создаем директорию для логов, если её нет
+    # Создаем директорию для логов в папке плагина, если её нет
     log_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'logs')
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
     
     # Создаем имя файла с текущей датой
-    log_file = os.path.join(log_dir, f'litter_map_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log')
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file_plugin = os.path.join(log_dir, f'litter_map_{timestamp}.log')
+    log_file_desktop = os.path.join(os.path.expanduser("~/Desktop"), f'litter_map_{timestamp}.log')
     
     # Настраиваем логирование
     logging.basicConfig(
         level=logging.DEBUG,
         format='%(asctime)s - %(levelname)s - %(message)s',
         handlers=[
-            logging.FileHandler(log_file, encoding='utf-8'),
+            logging.FileHandler(log_file_plugin, encoding='utf-8'),
+            logging.FileHandler(log_file_desktop, encoding='utf-8'),
             logging.StreamHandler()  # Также выводим в консоль
         ]
     )
-    return log_file
+    return log_file_plugin, log_file_desktop
 
 # Инициализируем логирование при импорте модуля
-log_file = setup_logging()
+log_file_plugin, log_file_desktop = setup_logging()
 logging.info(f"Starting LitterMap plugin")
 logging.info(f"Python version: {sys.version}")
 logging.info(f"QGIS version: {QgsApplication.QGIS_VERSION}")
+logging.info(f"Log files created at:")
+logging.info(f"- Plugin directory: {log_file_plugin}")
+logging.info(f"- Desktop: {log_file_desktop}")
 
 def extract_polygon(coors, coef_data):
     A, B, D, E, C, F = coef_data
