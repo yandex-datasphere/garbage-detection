@@ -38,6 +38,7 @@ import json
 import math
 import os
 from osgeo import gdal, osr
+import sys
 
 from .exiftool_custom import ExifToolHelper
 
