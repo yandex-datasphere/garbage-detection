@@ -337,11 +337,27 @@ def georeference_img(file_in, processed_path, add_points, add_raster):
                     # points calculations
                     pnt_orig = QgsGeometry().fromPointXY(QgsPointXY(lon, lat))
                     pnt = QgsGeometry().fromPointXY(QgsPointXY(lon, lat))
-                    if not pnt.transform(tr_to_meters):
-                        logging.error("Failed to transform coordinates to meters")
+
+                    # Check if coordinates are within valid range for Web Mercator
+                    if abs(lat) > 85.0511 or abs(lon) > 180:
+                        logging.error(f"Coordinates ({lat}, {lon}) are outside valid range for Web Mercator projection")
                         return None
-                    lon_m, lat_m = pnt.asPoint().x(), pnt.asPoint().y()
-                    logging.info(f"Transformed coordinates: {lon_m}, {lat_m}")
+
+                    # Create fresh coordinate transform
+                    tr = QgsCoordinateTransform(
+                        QgsCoordinateReferenceSystem("EPSG:4326"),
+                        QgsCoordinateReferenceSystem("EPSG:3857"),
+                        QgsProject.instance()
+                    )
+
+                    try:
+                        # Transform point
+                        pnt.transform(tr)
+                        lon_m, lat_m = pnt.asPoint().x(), pnt.asPoint().y()
+                        logging.info(f"Successfully transformed coordinates to meters: {lon_m}, {lat_m}")
+                    except Exception as e:
+                        logging.error(f"Error transforming coordinates: {str(e)}", exc_info=True)
+                        return None
 
                     # get corner points
                     try:
