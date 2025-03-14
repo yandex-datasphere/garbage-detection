@@ -190,10 +190,14 @@ def get_corner_points(center_lon, center_lat, altitude, dir_angle, pitch, aspect
     phiXh, phiYh = math.atan(ratXh), math.atan(
         ratYh)  # 1/2-FOV angle in X,Y directions at image centre. Will be in radians.
 
+    # Handle zero or near-zero pitch angles
+    MIN_PITCH = 0.001  # Minimum pitch angle in radians (about 0.057 degrees)
+    effective_pitch = pitch if abs(pitch) > MIN_PITCH else -MIN_PITCH
+
     # ground distance of camera ground projection to image; centre, front, back
-    Kc = altitude / math.tan(-1 * pitch)
-    Kf = altitude / math.tan(-1 * pitch + phiYh)
-    Kb = altitude / math.tan(-1 * pitch + phiYh * -1)
+    Kc = altitude / math.tan(-1 * effective_pitch)
+    Kf = altitude / math.tan(-1 * effective_pitch + phiYh)
+    Kb = altitude / math.tan(-1 * effective_pitch + phiYh * -1)
 
     # full distance, hypotenuse of ground distance and altitude triangle
     Rc = math.sqrt(altitude ** 2 + Kc ** 2)
