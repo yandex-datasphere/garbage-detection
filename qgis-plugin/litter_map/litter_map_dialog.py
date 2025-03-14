@@ -254,6 +254,7 @@ def georeference_img(file_in, processed_path, add_points, add_raster):
                 return None
             
             d = metadata[0]
+            logging.info(f"Available EXIF tags: {list(d.keys())}")
             
             # List of required EXIF tags
             required_tags = {
@@ -268,11 +269,13 @@ def georeference_img(file_in, processed_path, add_points, add_raster):
                 'Composite:FOV': 'Поле зрения камеры'
             }
             
-            # Check for missing tags
+            # Check for missing tags and log available values
             missing_tags = []
             for tag, description in required_tags.items():
                 if tag not in d:
                     missing_tags.append(f"{description} ({tag})")
+                else:
+                    logging.info(f"Found {description}: {d[tag]}")
             
             if missing_tags:
                 logging.error(f"Missing EXIF tags in {file_in}:")
@@ -291,6 +294,14 @@ def georeference_img(file_in, processed_path, add_points, add_raster):
                 focal_length_value = float(d['EXIF:FocalLength']) / 1000
                 img_width = int(d['EXIF:ExifImageWidth'])
                 img_height = int(d['EXIF:ExifImageHeight'])
+
+                logging.info(f"Parsed values:")
+                logging.info(f"- GPS: {lat}, {lon}")
+                logging.info(f"- Altitude: {altitude_value}")
+                logging.info(f"- Pitch: {pitch_value}")
+                logging.info(f"- Direction: {dir_init_value}")
+                logging.info(f"- Focal length: {focal_length_value}")
+                logging.info(f"- Image size: {img_width}x{img_height}")
 
                 # calculate auxiliary data
                 sensor_width = 2 * (focal_length_value * math.tan((0.5 * float(d['Composite:FOV'])) / 57.296))
