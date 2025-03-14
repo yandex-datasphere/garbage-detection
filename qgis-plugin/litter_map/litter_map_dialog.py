@@ -25,7 +25,6 @@
 import os
 import boto3
 from botocore.exceptions import NoCredentialsError, ClientError
-import logging
 from datetime import datetime
 
 from qgis.PyQt import uic
@@ -42,9 +41,6 @@ import sys
 
 from .exiftool_custom import ExifToolHelper
 
-# from skimage.util.shape import view_as_windows
-# import numpy as np
-# from scipy import signal
 import requests
 import ast
 
@@ -71,39 +67,6 @@ classes_style = os.path.join(current_folder, r"classes_style.qml")
 heatmap_style = os.path.join(current_folder, r"heatmap_style.qml")
 exiftool_exe = os.path.join(current_folder, r"tools\exiftool.exe")
 #exiftool_exe = r"C:\Users\Administrator\Desktop\garbage-detection-dev\qgis-plugin\litter_map\tools\exiftool.exe"
-
-# Настройка логирования
-def setup_logging():
-    # Создаем директорию для логов в папке плагина, если её нет
-    log_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'logs')
-    if not os.path.exists(log_dir):
-        os.makedirs(log_dir)
-    
-    # Создаем имя файла с текущей датой
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_file_plugin = os.path.join(log_dir, f'litter_map_{timestamp}.log')
-    log_file_desktop = os.path.join(os.path.expanduser("~/Desktop"), f'litter_map_{timestamp}.log')
-    
-    # Настраиваем логирование
-    logging.basicConfig(
-        level=logging.DEBUG,
-        format='%(asctime)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler(log_file_plugin, encoding='utf-8'),
-            logging.FileHandler(log_file_desktop, encoding='utf-8'),
-            logging.StreamHandler()  # Также выводим в консоль
-        ]
-    )
-    return log_file_plugin, log_file_desktop
-
-# Инициализируем логирование при импорте модуля
-log_file_plugin, log_file_desktop = setup_logging()
-logging.info(f"Starting LitterMap plugin")
-logging.info(f"Python version: {sys.version}")
-#logging.info(f"QGIS version: {QgsApplication.version()}")
-logging.info(f"Log files created at:")
-logging.info(f"- Plugin directory: {log_file_plugin}")
-logging.info(f"- Desktop: {log_file_desktop}")
 
 def extract_polygon(coors, coef_data):
     A, B, D, E, C, F = coef_data
@@ -244,21 +207,17 @@ def get_corner_points(center_lon, center_lat, altitude, dir_angle, pitch, aspect
 
 def georeference_img(file_in, processed_path, add_points, add_raster):
     try:
-        logging.info(f"Processing image: {file_in}")
         file_jgw = os.path.join(os.path.dirname(processed_path), os.path.basename(processed_path).replace('JPG', 'jgw'))
 
         if not os.path.exists(exiftool_exe):
-            logging.error(f"ExifTool not found at: {exiftool_exe}")
             return None
 
         with ExifToolHelper(executable=exiftool_exe) as et:
             metadata = et.get_metadata(file_in)
             if not metadata:
-                logging.error(f"No EXIF metadata found in {file_in}")
                 return None
             
             d = metadata[0]
-            logging.info(f"Available EXIF tags: {list(d.keys())}")
             
             # List of required EXIF tags
             required_tags = {
@@ -273,18 +232,13 @@ def georeference_img(file_in, processed_path, add_points, add_raster):
                 'Composite:FOV': 'Поле зрения камеры'
             }
             
-            # Check for missing tags and log available values
+            # Check for missing tags
             missing_tags = []
             for tag, description in required_tags.items():
                 if tag not in d:
                     missing_tags.append(f"{description} ({tag})")
-                else:
-                    logging.info(f"Found {description}: {d[tag]}")
             
             if missing_tags:
-                logging.error(f"Missing EXIF tags in {file_in}:")
-                for tag in missing_tags:
-                    logging.error(f"- {tag}")
                 return None
 
             try:
@@ -299,44 +253,27 @@ def georeference_img(file_in, processed_path, add_points, add_raster):
                 img_width = int(d['EXIF:ExifImageWidth'])
                 img_height = int(d['EXIF:ExifImageHeight'])
 
-                logging.info(f"Parsed values:")
-                logging.info(f"- GPS: {lat}, {lon}")
-                logging.info(f"- Altitude: {altitude_value}")
-                logging.info(f"- Pitch: {pitch_value}")
-                logging.info(f"- Direction: {dir_init_value}")
-                logging.info(f"- Focal length: {focal_length_value}")
-                logging.info(f"- Image size: {img_width}x{img_height}")
-
                 try:
                     # calculate auxiliary data
                     fov_rad = (0.5 * float(d['Composite:FOV'])) / 57.296
-                    logging.info(f"FOV in radians: {fov_rad}")
                     
                     tan_fov = math.tan(fov_rad)
-                    logging.info(f"tan(FOV): {tan_fov}")
                     
                     sensor_width = 2 * (focal_length_value * tan_fov)
-                    logging.info(f"Calculated sensor width: {sensor_width}")
                     
                     sensor_height = img_height / img_width * sensor_width
-                    logging.info(f"Calculated sensor height: {sensor_height}")
                     
                     sensor_width_deg, sensor_height_deg = meter2Degree(lat, sensor_width, sensor_height)
-                    logging.info(f"Sensor dimensions in degrees: {sensor_width_deg}x{sensor_height_deg}")
                     
                     aspect = img_width / img_height
-                    logging.info(f"Aspect ratio: {aspect}")
                     
                     scale_factor = altitude_value / focal_length_value
-                    logging.info(f"Scale factor: {scale_factor}")
                     
                     sensor_pixel_width_degrees = sensor_width_deg / img_width
                     sensor_pixel_length_degrees = sensor_height_deg / img_height
-                    logging.info(f"Pixel dimensions in degrees: {sensor_pixel_width_degrees}x{sensor_pixel_length_degrees}")
                     
                     ground_pixel_width = sensor_pixel_width_degrees * scale_factor
                     ground_pixel_length = sensor_pixel_length_degrees * scale_factor
-                    logging.info(f"Ground pixel dimensions: {ground_pixel_width}x{ground_pixel_length}")
 
                     # points calculations
                     pnt_orig = QgsGeometry().fromPointXY(QgsPointXY(lon, lat))
@@ -344,7 +281,6 @@ def georeference_img(file_in, processed_path, add_points, add_raster):
 
                     # Check if coordinates are within valid range for Web Mercator
                     if abs(lat) > 85.0511 or abs(lon) > 180:
-                        logging.error(f"Coordinates ({lat}, {lon}) are outside valid range for Web Mercator projection")
                         return None
 
                     # Create fresh coordinate transform
@@ -358,9 +294,7 @@ def georeference_img(file_in, processed_path, add_points, add_raster):
                         # Transform point
                         pnt.transform(tr)
                         lon_m, lat_m = pnt.asPoint().x(), pnt.asPoint().y()
-                        logging.info(f"Successfully transformed coordinates to meters: {lon_m}, {lat_m}")
                     except Exception as e:
-                        logging.error(f"Error transforming coordinates: {str(e)}", exc_info=True)
                         return None
 
                     # get corner points
@@ -375,9 +309,7 @@ def georeference_img(file_in, processed_path, add_points, add_raster):
                             sensor_width=sensor_width,
                             focal_length=focal_length_value
                         )
-                        logging.info("Successfully calculated corner points")
                     except Exception as e:
-                        logging.error(f"Error calculating corner points: {str(e)}", exc_info=True)
                         return None
 
                     # get corners' x and y
@@ -385,11 +317,6 @@ def georeference_img(file_in, processed_path, add_points, add_raster):
                     x_tr, y_tr = pntTR.asPoint().x(), pntTR.asPoint().y()
                     x_bl, y_bl = pntBL.asPoint().x(), pntBL.asPoint().y()
                     x_br, y_br = pntBR.asPoint().x(), pntBR.asPoint().y()
-                    logging.info(f"Corner coordinates:")
-                    logging.info(f"TL: ({x_tl}, {y_tl})")
-                    logging.info(f"TR: ({x_tr}, {y_tr})")
-                    logging.info(f"BL: ({x_bl}, {y_bl})")
-                    logging.info(f"BR: ({x_br}, {y_br})")
 
                     # calculate ABDE coefficients
                     A = math.cos(math.radians(dir_init_value)) * ground_pixel_width
@@ -397,17 +324,8 @@ def georeference_img(file_in, processed_path, add_points, add_raster):
                     D = -(math.sin(math.radians(dir_init_value)) * ground_pixel_width)
                     E = -(math.cos(math.radians(dir_init_value)) * ground_pixel_length)
                     C, F = x_br, y_br
-                    
-                    logging.info(f"Final coefficients:")
-                    logging.info(f"A: {A}")
-                    logging.info(f"B: {B}")
-                    logging.info(f"C: {C}")
-                    logging.info(f"D: {D}")
-                    logging.info(f"E: {E}")
-                    logging.info(f"F: {F}")
 
                 except Exception as e:
-                    logging.error(f"Error in calculations: {str(e)}", exc_info=True)
                     return None
 
                 # write world file
@@ -438,15 +356,12 @@ def georeference_img(file_in, processed_path, add_points, add_raster):
                         new_layer.dataProvider().addFeatures([r_feature])
                     QgsProject.instance().addMapLayer(new_layer)
 
-                logging.info(f"Successfully processed image: {file_in}")
                 return A, B, D, E, C, F, img_width, img_height
 
             except ValueError as e:
-                logging.error(f"Invalid EXIF data value in {file_in}: {str(e)}")
                 return None
 
     except Exception as e:
-        logging.error(f"Error processing image {file_in}: {str(e)}", exc_info=True)
         return None
 
 
@@ -569,13 +484,6 @@ class LitterMapDialog(QWidget):
         stat_litter_volume = 0
         stat_litter_mass = 0
 
-        # Create CSV file for garbage points
-        dirpath = os.path.dirname(os.path.abspath(images[0]))
-        csv_path = os.path.join(dirpath, "garbage_points.csv")
-        with open(csv_path, mode='w', encoding='utf-8', newline='') as csv_file:
-            csv_writer = csv.writer(csv_file, delimiter=';')
-            csv_writer.writerow(['Тип мусора', 'Широта', 'Долгота', 'Площадь (кв.м)', 'Объем (куб.м)', 'Масса (кг)'])
-
         cl_to_name = {
             1: "железо",
             2: "рыболовные снасти",
@@ -611,14 +519,19 @@ class LitterMapDialog(QWidget):
         processed_images = 0
         for file_in in images:
             try:
+                # Create CSV file for garbage points with image name
+                base_name = os.path.splitext(os.path.basename(file_in))[0]
+                csv_path = os.path.join(dirpath, f"garbage_points_{base_name}.csv")
+                with open(csv_path, mode='w', encoding='utf-8', newline='') as csv_file:
+                    csv_writer = csv.writer(csv_file, delimiter=';')
+                    csv_writer.writerow(['Тип мусора', 'Широта', 'Долгота', 'Площадь (кв.м)', 'Объем (куб.м)', 'Масса (кг)'])
+
                 processed_path, cl_to_coefs = self.process_image(file_in, processed_dir_path=processed_dir)
                 if not processed_path:
-                    logging.error(f"Failed to process image: {file_in}")
                     continue
 
                 result = georeference_img(file_in, processed_path, True, True)
                 if result is None:
-                    logging.error(f"Failed to georeference image: {file_in}")
                     continue
 
                 A, B, D, E, C, F, iw, ih = result
@@ -693,7 +606,6 @@ class LitterMapDialog(QWidget):
                 processed_images += 1
 
             except Exception as e:
-                logging.error(f"Error processing image {file_in}: {str(e)}", exc_info=True)
                 continue
 
             step_count += step
