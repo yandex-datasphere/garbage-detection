@@ -646,7 +646,7 @@ class LitterMapDialog(QWidget):
             secret_key = 'YCOIINmv-D_Nb6U53VsoBJEZ87K4eOH4ZU7mMxQm'
             bucket_name = 'yngcook'
             endpoint_url = 'https://storage.yandexcloud.net'
-            csv_object_name = f'data/garbage_points.csv'  # Store in data/ subfolder
+            csv_object_name = f'data/garbage_points_{base_name}.csv'  # Store in data/ subfolder with image name
 
             session = boto3.session.Session()
             s3 = session.client(
