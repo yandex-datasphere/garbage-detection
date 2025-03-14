@@ -303,50 +303,92 @@ def georeference_img(file_in, processed_path, add_points, add_raster):
                 logging.info(f"- Focal length: {focal_length_value}")
                 logging.info(f"- Image size: {img_width}x{img_height}")
 
-                # calculate auxiliary data
-                sensor_width = 2 * (focal_length_value * math.tan((0.5 * float(d['Composite:FOV'])) / 57.296))
-                sensor_height = img_height / img_width * sensor_width
-                sensor_width_deg, sensor_height_deg = meter2Degree(lat, sensor_width, sensor_height)
-                aspect = img_width / img_height
-                scale_factor = altitude_value / focal_length_value
-                sensor_pixel_width_degrees = sensor_width_deg / img_width
-                sensor_pixel_length_degrees = sensor_height_deg / img_height
-                img_hwidth_degrees = (sensor_width_deg * scale_factor) / 2
-                img_hlength_degrees = (sensor_height_deg * scale_factor) / 2
-                ground_pixel_width = sensor_pixel_width_degrees * scale_factor
-                ground_pixel_length = sensor_pixel_length_degrees * scale_factor
+                try:
+                    # calculate auxiliary data
+                    fov_rad = (0.5 * float(d['Composite:FOV'])) / 57.296
+                    logging.info(f"FOV in radians: {fov_rad}")
+                    
+                    tan_fov = math.tan(fov_rad)
+                    logging.info(f"tan(FOV): {tan_fov}")
+                    
+                    sensor_width = 2 * (focal_length_value * tan_fov)
+                    logging.info(f"Calculated sensor width: {sensor_width}")
+                    
+                    sensor_height = img_height / img_width * sensor_width
+                    logging.info(f"Calculated sensor height: {sensor_height}")
+                    
+                    sensor_width_deg, sensor_height_deg = meter2Degree(lat, sensor_width, sensor_height)
+                    logging.info(f"Sensor dimensions in degrees: {sensor_width_deg}x{sensor_height_deg}")
+                    
+                    aspect = img_width / img_height
+                    logging.info(f"Aspect ratio: {aspect}")
+                    
+                    scale_factor = altitude_value / focal_length_value
+                    logging.info(f"Scale factor: {scale_factor}")
+                    
+                    sensor_pixel_width_degrees = sensor_width_deg / img_width
+                    sensor_pixel_length_degrees = sensor_height_deg / img_height
+                    logging.info(f"Pixel dimensions in degrees: {sensor_pixel_width_degrees}x{sensor_pixel_length_degrees}")
+                    
+                    ground_pixel_width = sensor_pixel_width_degrees * scale_factor
+                    ground_pixel_length = sensor_pixel_length_degrees * scale_factor
+                    logging.info(f"Ground pixel dimensions: {ground_pixel_width}x{ground_pixel_length}")
 
-                # points calculations
-                pnt_orig = QgsGeometry().fromPointXY(QgsPointXY(lon, lat))
-                pnt = QgsGeometry().fromPointXY(QgsPointXY(lon, lat))
-                pnt.transform(tr_to_meters)
-                lon_m, lat_m = pnt.asPoint().x(), pnt.asPoint().y()
+                    # points calculations
+                    pnt_orig = QgsGeometry().fromPointXY(QgsPointXY(lon, lat))
+                    pnt = QgsGeometry().fromPointXY(QgsPointXY(lon, lat))
+                    if not pnt.transform(tr_to_meters):
+                        logging.error("Failed to transform coordinates to meters")
+                        return None
+                    lon_m, lat_m = pnt.asPoint().x(), pnt.asPoint().y()
+                    logging.info(f"Transformed coordinates: {lon_m}, {lat_m}")
 
-                # get corner points
-                pntTL, pntTR, pntBL, pntBR = get_corner_points(
-                    center_lon=lon_m,
-                    center_lat=lat_m,
-                    altitude=altitude_value,
-                    dir_angle=dir_spin_value,
-                    pitch=pitch_value,
-                    aspect=aspect,
-                    sensor_width=sensor_width,
-                    focal_length=focal_length_value
-                )
+                    # get corner points
+                    try:
+                        pntTL, pntTR, pntBL, pntBR = get_corner_points(
+                            center_lon=lon_m,
+                            center_lat=lat_m,
+                            altitude=altitude_value,
+                            dir_angle=dir_spin_value,
+                            pitch=pitch_value,
+                            aspect=aspect,
+                            sensor_width=sensor_width,
+                            focal_length=focal_length_value
+                        )
+                        logging.info("Successfully calculated corner points")
+                    except Exception as e:
+                        logging.error(f"Error calculating corner points: {str(e)}", exc_info=True)
+                        return None
 
-                # get corners' x and y
-                x_tl, y_tl = pntTL.asPoint().x(), pntTL.asPoint().y()
-                x_tr, y_tr = pntTR.asPoint().x(), pntTR.asPoint().y()
-                x_bl, y_bl = pntBL.asPoint().x(), pntBL.asPoint().y()
-                x_br, y_br = pntBR.asPoint().x(), pntBR.asPoint().y()
+                    # get corners' x and y
+                    x_tl, y_tl = pntTL.asPoint().x(), pntTL.asPoint().y()
+                    x_tr, y_tr = pntTR.asPoint().x(), pntTR.asPoint().y()
+                    x_bl, y_bl = pntBL.asPoint().x(), pntBL.asPoint().y()
+                    x_br, y_br = pntBR.asPoint().x(), pntBR.asPoint().y()
+                    logging.info(f"Corner coordinates:")
+                    logging.info(f"TL: ({x_tl}, {y_tl})")
+                    logging.info(f"TR: ({x_tr}, {y_tr})")
+                    logging.info(f"BL: ({x_bl}, {y_bl})")
+                    logging.info(f"BR: ({x_br}, {y_br})")
 
-                # calculate ABDE coefficients
-                A = math.cos(math.radians(dir_init_value)) * ground_pixel_width
-                B = -(math.sin(math.radians(dir_init_value)) * ground_pixel_length)
-                D = -(math.sin(math.radians(dir_init_value)) * ground_pixel_width)
-                E = -(math.cos(math.radians(dir_init_value)) * ground_pixel_length)
+                    # calculate ABDE coefficients
+                    A = math.cos(math.radians(dir_init_value)) * ground_pixel_width
+                    B = -(math.sin(math.radians(dir_init_value)) * ground_pixel_length)
+                    D = -(math.sin(math.radians(dir_init_value)) * ground_pixel_width)
+                    E = -(math.cos(math.radians(dir_init_value)) * ground_pixel_length)
+                    C, F = x_br, y_br
+                    
+                    logging.info(f"Final coefficients:")
+                    logging.info(f"A: {A}")
+                    logging.info(f"B: {B}")
+                    logging.info(f"C: {C}")
+                    logging.info(f"D: {D}")
+                    logging.info(f"E: {E}")
+                    logging.info(f"F: {F}")
 
-                C, F = x_br, y_br
+                except Exception as e:
+                    logging.error(f"Error in calculations: {str(e)}", exc_info=True)
+                    return None
 
                 # write world file
                 with open(file_jgw, 'w') as f:
