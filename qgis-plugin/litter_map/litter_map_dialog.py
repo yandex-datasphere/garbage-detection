@@ -598,6 +598,33 @@ class LitterMapDialog(QWidget):
                                 f"{mass:.3f}"
                             ])
 
+                # Upload CSV file to Yandex Storage for this image
+                access_key = 'YCAJEx_tO4BLa7mIZG8FJB00p'
+                secret_key = 'YCOIINmv-D_Nb6U53VsoBJEZ87K4eOH4ZU7mMxQm'
+                bucket_name = 'yngcook'
+                endpoint_url = 'https://storage.yandexcloud.net'
+                csv_object_name = f'data/garbage_points_{base_name}.csv'  # Store in data/ subfolder with image name
+
+                session = boto3.session.Session()
+                s3 = session.client(
+                    service_name='s3',
+                    endpoint_url=endpoint_url,
+                    aws_access_key_id=access_key,
+                    aws_secret_access_key=secret_key,
+                    region_name='ru-central1'
+                )
+
+                try:
+                    s3.upload_file(
+                        Filename=csv_path,
+                        Bucket=bucket_name,
+                        Key=csv_object_name,
+                        ExtraArgs={'ACL': 'public-read'}
+                    )
+                    print(f"Successfully uploaded {csv_object_name} to Yandex Storage")
+                except Exception as e:
+                    print(f"Error uploading CSV to Yandex Storage: {str(e)}")
+
                 if not all_frame:
                     all_frame = polygon_coors
                 else:
@@ -640,33 +667,6 @@ class LitterMapDialog(QWidget):
             stat_msg += f"Центроид участка - ({c_x}, {c_y})\n"
             stat_msg += f"Успешно обработано изображений: {processed_images} из {len(images)}"
             self.txt_area.setPlainText(stat_msg)
-
-            # Upload CSV file to Yandex Storage
-            access_key = 'YCAJEx_tO4BLa7mIZG8FJB00p'
-            secret_key = 'YCOIINmv-D_Nb6U53VsoBJEZ87K4eOH4ZU7mMxQm'
-            bucket_name = 'yngcook'
-            endpoint_url = 'https://storage.yandexcloud.net'
-            csv_object_name = f'data/garbage_points_{base_name}.csv'  # Store in data/ subfolder with image name
-
-            session = boto3.session.Session()
-            s3 = session.client(
-                service_name='s3',
-                endpoint_url=endpoint_url,
-                aws_access_key_id=access_key,
-                aws_secret_access_key=secret_key,
-                region_name='ru-central1'
-            )
-
-            try:
-                s3.upload_file(
-                    Filename=csv_path,
-                    Bucket=bucket_name,
-                    Key=csv_object_name,
-                    ExtraArgs={'ACL': 'public-read'}
-                )
-                print(f"Successfully uploaded {csv_object_name} to Yandex Storage")
-            except Exception as e:
-                print(f"Error uploading CSV to Yandex Storage: {str(e)}")
 
             QgsProject.instance().addMapLayer(pic_coors)
             pic_coors.loadNamedStyle(classes_style)
