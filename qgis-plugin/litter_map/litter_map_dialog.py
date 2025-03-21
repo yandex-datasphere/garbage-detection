@@ -445,7 +445,7 @@ class LitterMapDialog(QWidget):
             secret_key = 'YCOIINmv-D_Nb6U53VsoBJEZ87K4eOH4ZU7mMxQm'
             bucket_name = 'yngcook'
             endpoint_url = 'https://storage.yandexcloud.net'
-            object_name = f'processed/{base_name}'  # Store in processed/ subfolder
+            object_name = f'arctika_photos/{base_name}'  # Store in processed/ subfolder
 
             session = boto3.session.Session()
             s3 = session.client(
@@ -603,7 +603,7 @@ class LitterMapDialog(QWidget):
                 secret_key = 'YCOIINmv-D_Nb6U53VsoBJEZ87K4eOH4ZU7mMxQm'
                 bucket_name = 'yngcook'
                 endpoint_url = 'https://storage.yandexcloud.net'
-                csv_object_name = f'data/garbage_points_{base_name}.csv'  # Store in data/ subfolder with image name
+                csv_object_name = f'arctika/garbage_points_{base_name}.csv'  # Store in arctika/ subfolder with image name
 
                 session = boto3.session.Session()
                 s3 = session.client(
