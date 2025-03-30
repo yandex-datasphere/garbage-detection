@@ -20,7 +20,6 @@
 
 В данном репозитории содержится:
 * [Код для предобработки данных](model-training/data-preparation.ipynb) и [обучения нескольких классов моделей сегментации](model-training/models-training.ipynb). В экспериментах использовались архитектура UNet, SegFormer.
-* [Инструмент для разметки данных](segmentation-backend/README.md), который ускоряет и автоматизирует разметку первоначального датасета снимков побережья с помощью модели Segment Anything.
 * [Пример](example/run-model.ipynb) запуска модели сегментации мусора. [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://githubtocolab.com/yandex-datasphere/garbage-detection/blob/main/example/run_model.ipynb)
 * [Код сервера для запуска модели сегментации в облаке](model-server/README.md)
 * [Плагин для QGIS](qgis-plugin/litter_map)
