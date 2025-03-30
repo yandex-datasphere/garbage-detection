@@ -23,6 +23,9 @@
 """
 
 import os
+import boto3
+from botocore.exceptions import NoCredentialsError, ClientError
+from datetime import datetime
 
 from qgis.PyQt import uic
 from qgis.PyQt import QtWidgets
@@ -34,12 +37,10 @@ import json
 import math
 import os
 from osgeo import gdal, osr
+import sys
 
 from .exiftool_custom import ExifToolHelper
 
-# from skimage.util.shape import view_as_windows
-# import numpy as np
-# from scipy import signal
 import requests
 import ast
 
@@ -65,7 +66,7 @@ current_folder = os.path.dirname(os.path.realpath(__file__))
 classes_style = os.path.join(current_folder, r"classes_style.qml")
 heatmap_style = os.path.join(current_folder, r"heatmap_style.qml")
 exiftool_exe = os.path.join(current_folder, r"tools\exiftool.exe")
-
+#exiftool_exe = r"C:\Users\Administrator\Desktop\garbage-detection-dev\qgis-plugin\litter_map\tools\exiftool.exe"
 
 def extract_polygon(coors, coef_data):
     A, B, D, E, C, F = coef_data
@@ -152,10 +153,14 @@ def get_corner_points(center_lon, center_lat, altitude, dir_angle, pitch, aspect
     phiXh, phiYh = math.atan(ratXh), math.atan(
         ratYh)  # 1/2-FOV angle in X,Y directions at image centre. Will be in radians.
 
+    # Handle zero or near-zero pitch angles
+    MIN_PITCH = 0.001  # Minimum pitch angle in radians (about 0.057 degrees)
+    effective_pitch = pitch if abs(pitch) > MIN_PITCH else -MIN_PITCH
+
     # ground distance of camera ground projection to image; centre, front, back
-    Kc = altitude / math.tan(-1 * pitch)
-    Kf = altitude / math.tan(-1 * pitch + phiYh)
-    Kb = altitude / math.tan(-1 * pitch + phiYh * -1)
+    Kc = altitude / math.tan(-1 * effective_pitch)
+    Kf = altitude / math.tan(-1 * effective_pitch + phiYh)
+    Kb = altitude / math.tan(-1 * effective_pitch + phiYh * -1)
 
     # full distance, hypotenuse of ground distance and altitude triangle
     Rc = math.sqrt(altitude ** 2 + Kc ** 2)
@@ -201,99 +206,163 @@ def get_corner_points(center_lon, center_lat, altitude, dir_angle, pitch, aspect
 
 
 def georeference_img(file_in, processed_path, add_points, add_raster):
-    # make a georeference for an image
-    
+    try:
+        file_jgw = os.path.join(os.path.dirname(processed_path), os.path.basename(processed_path).replace('JPG', 'jgw'))
 
-    file_jgw = os.path.join(os.path.dirname(processed_path), os.path.basename(processed_path).replace('JPG', 'jgw'))
+        if not os.path.exists(exiftool_exe):
+            return None
 
-    with ExifToolHelper(executable=exiftool_exe) as et:
-        for d in et.get_metadata(file_in):
-            # get image data
-            lat = float(d['Composite:GPSLatitude'])
-            lon = float(d['Composite:GPSLongitude'])
-            altitude_value = float(d['XMP:RelativeAltitude'])
-            pitch_value = float(d['XMP:GimbalPitchDegree']) / 180 * math.pi
-            dir_spin_value = (90 + float(d['XMP:FlightYawDegree'])) / 180 * math.pi
-            dir_init_value = float(d['XMP:FlightYawDegree'])
-            focal_length_value = float(d['EXIF:FocalLength']) / 1000
-            img_width = int(d['EXIF:ExifImageWidth'])
-            img_height = int(d['EXIF:ExifImageHeight'])
+        with ExifToolHelper(executable=exiftool_exe) as et:
+            metadata = et.get_metadata(file_in)
+            if not metadata:
+                return None
+            
+            d = metadata[0]
+            
+            # List of required EXIF tags
+            required_tags = {
+                'Composite:GPSLatitude': 'GPS координаты (широта)',
+                'Composite:GPSLongitude': 'GPS координаты (долгота)',
+                'XMP:RelativeAltitude': 'Относительная высота',
+                'XMP:GimbalPitchDegree': 'Угол наклона камеры',
+                'XMP:FlightYawDegree': 'Курс дрона',
+                'EXIF:FocalLength': 'Фокусное расстояние',
+                'EXIF:ExifImageWidth': 'Ширина изображения',
+                'EXIF:ExifImageHeight': 'Высота изображения',
+                'Composite:FOV': 'Поле зрения камеры'
+            }
+            
+            # Check for missing tags
+            missing_tags = []
+            for tag, description in required_tags.items():
+                if tag not in d:
+                    missing_tags.append(f"{description} ({tag})")
+            
+            if missing_tags:
+                return None
 
-            # calculate auxiliary data
-            sensor_width = 2 * (focal_length_value * math.tan((0.5 * float(d['Composite:FOV'])) / 57.296))
-            sensor_height = img_height / img_width * sensor_width
-            sensor_width_deg, sensor_height_deg = meter2Degree(lat, sensor_width, sensor_height)
-            aspect = img_width / img_height
-            scale_factor = altitude_value / focal_length_value
-            sensor_pixel_width_degrees = sensor_width_deg / img_width
-            sensor_pixel_length_degrees = sensor_height_deg / img_height
-            img_hwidth_degrees = (sensor_width_deg * scale_factor) / 2
-            img_hlength_degrees = (sensor_height_deg * scale_factor) / 2
-            ground_pixel_width = sensor_pixel_width_degrees * scale_factor
-            ground_pixel_length = sensor_pixel_length_degrees * scale_factor
+            try:
+                # get image data
+                lat = float(d['Composite:GPSLatitude'])
+                lon = float(d['Composite:GPSLongitude'])
+                altitude_value = float(d['XMP:RelativeAltitude'])
+                pitch_value = float(d['XMP:GimbalPitchDegree']) / 180 * math.pi
+                dir_spin_value = (90 + float(d['XMP:FlightYawDegree'])) / 180 * math.pi
+                dir_init_value = float(d['XMP:FlightYawDegree'])
+                focal_length_value = float(d['EXIF:FocalLength']) / 1000
+                img_width = int(d['EXIF:ExifImageWidth'])
+                img_height = int(d['EXIF:ExifImageHeight'])
 
-            # points calculations
-            # center point
-            pnt_orig = QgsGeometry().fromPointXY(QgsPointXY(lon, lat))
-            pnt = QgsGeometry().fromPointXY(QgsPointXY(lon, lat))
-            pnt.transform(tr_to_meters)
-            lon_m, lat_m = pnt.asPoint().x(), pnt.asPoint().y()
+                try:
+                    # calculate auxiliary data
+                    fov_rad = (0.5 * float(d['Composite:FOV'])) / 57.296
+                    
+                    tan_fov = math.tan(fov_rad)
+                    
+                    sensor_width = 2 * (focal_length_value * tan_fov)
+                    
+                    sensor_height = img_height / img_width * sensor_width
+                    
+                    sensor_width_deg, sensor_height_deg = meter2Degree(lat, sensor_width, sensor_height)
+                    
+                    aspect = img_width / img_height
+                    
+                    scale_factor = altitude_value / focal_length_value
+                    
+                    sensor_pixel_width_degrees = sensor_width_deg / img_width
+                    sensor_pixel_length_degrees = sensor_height_deg / img_height
+                    
+                    ground_pixel_width = sensor_pixel_width_degrees * scale_factor
+                    ground_pixel_length = sensor_pixel_length_degrees * scale_factor
 
-            # get corner points
-            pntTL, pntTR, pntBL, pntBR = get_corner_points(
-                center_lon=lon_m,
-                center_lat=lat_m,
-                altitude=altitude_value,
-                dir_angle=dir_spin_value,
-                pitch=pitch_value,
-                aspect=aspect,
-                sensor_width=sensor_width,
-                focal_length=focal_length_value
-            )
+                    # points calculations
+                    pnt_orig = QgsGeometry().fromPointXY(QgsPointXY(lon, lat))
+                    pnt = QgsGeometry().fromPointXY(QgsPointXY(lon, lat))
 
-            # get corners' x and y
-            x_tl, y_tl = pntTL.asPoint().x(), pntTL.asPoint().y()
-            x_tr, y_tr = pntTR.asPoint().x(), pntTR.asPoint().y()
-            x_bl, y_bl = pntBL.asPoint().x(), pntBL.asPoint().y()
-            x_br, y_br = pntBR.asPoint().x(), pntBR.asPoint().y()
+                    # Check if coordinates are within valid range for Web Mercator
+                    if abs(lat) > 85.0511 or abs(lon) > 180:
+                        return None
 
-            # calcuilate ABDE coefficients
-            A = math.cos(math.radians(dir_init_value)) * ground_pixel_width
-            B = -(math.sin(math.radians(dir_init_value)) * ground_pixel_length)
-            D = -(math.sin(math.radians(dir_init_value)) * ground_pixel_width)
-            E = -(math.cos(math.radians(dir_init_value)) * ground_pixel_length)
+                    # Create fresh coordinate transform
+                    tr = QgsCoordinateTransform(
+                        QgsCoordinateReferenceSystem("EPSG:4326"),
+                        QgsCoordinateReferenceSystem("EPSG:3857"),
+                        QgsProject.instance()
+                    )
 
-            C, F = x_br, y_br
+                    try:
+                        # Transform point
+                        pnt.transform(tr)
+                        lon_m, lat_m = pnt.asPoint().x(), pnt.asPoint().y()
+                    except Exception as e:
+                        return None
 
-            # write world file
-            with open(file_jgw, 'w') as f:
-                f.write(f"{A:1.10f}\n")  # A
-                f.write(f"{B:1.10f}\n")  # D
-                f.write(f"{D:1.10f}\n")  #
-                f.write(f"{E:1.10f}\n")
-                f.write(f"{x_br}\n")
-                f.write(f"{y_br}")
+                    # get corner points
+                    try:
+                        pntTL, pntTR, pntBL, pntBR = get_corner_points(
+                            center_lon=lon_m,
+                            center_lat=lat_m,
+                            altitude=altitude_value,
+                            dir_angle=dir_spin_value,
+                            pitch=pitch_value,
+                            aspect=aspect,
+                            sensor_width=sensor_width,
+                            focal_length=focal_length_value
+                        )
+                    except Exception as e:
+                        return None
 
-            if add_raster:
-                r_layer = QgsRasterLayer(processed_path, os.path.basename(processed_path))
-                r_layer.setCrs(crs_degrees)
-                QgsProject.instance().addMapLayer(r_layer)
-                provider = r_layer.dataProvider()
-                provider.setNoDataValue(1, 0)  # remove black value
-                r_layer.triggerRepaint()
-                l_id = QgsProject.instance().layerTreeRoot().findLayer(r_layer.id())
-                # l_id.setItemVisibilityChecked(False)
-                l_id.setExpanded(False)
-            if add_points:
-                new_layer = add_tech_layer("PNTS", 'Point')
-                for g in [pnt_orig, pntTL, pntTR, pntBL, pntBR]:
-                    r_feature = QgsFeature()
-                    r_feature.setFields(new_layer.fields())
-                    r_feature.setGeometry(g)
-                    new_layer.dataProvider().addFeatures([r_feature])
-                QgsProject.instance().addMapLayer(new_layer)
-                # print(A, D, B, E, C, F, img_width, img_height)
-            return A, D, B, E, C, F, img_width, img_height
+                    # get corners' x and y
+                    x_tl, y_tl = pntTL.asPoint().x(), pntTL.asPoint().y()
+                    x_tr, y_tr = pntTR.asPoint().x(), pntTR.asPoint().y()
+                    x_bl, y_bl = pntBL.asPoint().x(), pntBL.asPoint().y()
+                    x_br, y_br = pntBR.asPoint().x(), pntBR.asPoint().y()
+
+                    # calculate ABDE coefficients
+                    A = math.cos(math.radians(dir_init_value)) * ground_pixel_width
+                    B = -(math.sin(math.radians(dir_init_value)) * ground_pixel_length)
+                    D = -(math.sin(math.radians(dir_init_value)) * ground_pixel_width)
+                    E = -(math.cos(math.radians(dir_init_value)) * ground_pixel_length)
+                    C, F = x_br, y_br
+
+                except Exception as e:
+                    return None
+
+                # write world file
+                with open(file_jgw, 'w') as f:
+                    f.write(f"{A:1.10f}\n")  # A
+                    f.write(f"{B:1.10f}\n")  # D
+                    f.write(f"{D:1.10f}\n")  #
+                    f.write(f"{E:1.10f}\n")
+                    f.write(f"{x_br}\n")
+                    f.write(f"{y_br}")
+
+                if add_raster:
+                    r_layer = QgsRasterLayer(processed_path, os.path.basename(processed_path))
+                    r_layer.setCrs(crs_degrees)
+                    QgsProject.instance().addMapLayer(r_layer)
+                    provider = r_layer.dataProvider()
+                    provider.setNoDataValue(1, 0)  # remove black value
+                    r_layer.triggerRepaint()
+                    l_id = QgsProject.instance().layerTreeRoot().findLayer(r_layer.id())
+                    l_id.setExpanded(False)
+
+                if add_points:
+                    new_layer = add_tech_layer("PNTS", 'Point')
+                    for g in [pnt_orig, pntTL, pntTR, pntBL, pntBR]:
+                        r_feature = QgsFeature()
+                        r_feature.setFields(new_layer.fields())
+                        r_feature.setGeometry(g)
+                        new_layer.dataProvider().addFeatures([r_feature])
+                    QgsProject.instance().addMapLayer(new_layer)
+
+                return A, B, D, E, C, F, img_width, img_height
+
+            except ValueError as e:
+                return None
+
+    except Exception as e:
+        return None
 
 
 class LitterMapDialog(QWidget):
@@ -371,6 +440,33 @@ class LitterMapDialog(QWidget):
             save_file.write(response.content)
             save_file.close()
 
+            # Upload to Yandex Storage
+            access_key = 'YCAJEx_tO4BLa7mIZG8FJB00p'
+            secret_key = 'YCOIINmv-D_Nb6U53VsoBJEZ87K4eOH4ZU7mMxQm'
+            bucket_name = 'yngcook'
+            endpoint_url = 'https://storage.yandexcloud.net'
+            object_name = f'arctika_photos/{base_name}'  # Store in processed/ subfolder
+
+            session = boto3.session.Session()
+            s3 = session.client(
+                service_name='s3',
+                endpoint_url=endpoint_url,
+                aws_access_key_id=access_key,
+                aws_secret_access_key=secret_key,
+                region_name='ru-central1'
+            )
+
+            try:
+                s3.upload_file(
+                    Filename=processed_path,
+                    Bucket=bucket_name,
+                    Key=object_name,
+                    ExtraArgs={'ACL': 'public-read'}
+                )
+                print(f"Successfully uploaded {object_name} to Yandex Storage")
+            except Exception as e:
+                print(f"Error uploading to Yandex Storage: {str(e)}")
+
             cl_coefs_str = response.cookies.get("cl_coefs").replace("\\054", ",")[1:-1]
             cl_coefs = ast.literal_eval(cl_coefs_str)
         return processed_path, cl_coefs
@@ -387,8 +483,6 @@ class LitterMapDialog(QWidget):
         stat_litter_area = 0
         stat_litter_volume = 0
         stat_litter_mass = 0
-        # x_length = 0
-        # y_length = 0
 
         cl_to_name = {
             1: "железо",
@@ -414,7 +508,6 @@ class LitterMapDialog(QWidget):
         frame_intersection = None
 
         pic_coors = add_tech_layer('NN_points', 'Point')
-        # pic_coors_heatmap = add_tech_layer('NN_points_heatmap', 'Point')
 
         dirpath = os.path.dirname(os.path.abspath(images[0]))
         processed_dir = dirpath + "/processed"
@@ -423,76 +516,124 @@ class LitterMapDialog(QWidget):
         except:
             pass
 
+        processed_images = 0
         for file_in in images:
-            processed_path, cl_to_coefs = self.process_image(file_in, processed_dir_path=processed_dir)
+            try:
+                # Create CSV file for garbage points with image name
+                base_name = os.path.splitext(os.path.basename(file_in))[0]
+                csv_path = os.path.join(dirpath, f"garbage_points_{base_name}.csv")
+                with open(csv_path, mode='w', encoding='utf-8', newline='') as csv_file:
+                    csv_writer = csv.writer(csv_file, delimiter=';')
+                    csv_writer.writerow(['Тип мусора', 'Широта', 'Долгота', 'Площадь (кв.м)', 'Объем (куб.м)', 'Масса (кг)'])
 
-            A, B, D, E, C, F, iw, ih = georeference_img(file_in, processed_path, True, True)
-            polygon_coors = img_frame(A, B, D, E, C, F, iw, ih)
+                processed_path, cl_to_coefs = self.process_image(file_in, processed_dir_path=processed_dir)
+                if not processed_path:
+                    continue
 
-            r_feature = QgsFeature()
-            r_feature.setFields(new_layer_polygon.fields())
-            r_feature.setGeometry(polygon_coors)
-            new_layer_polygon.dataProvider().addFeatures([r_feature])
+                result = georeference_img(file_in, processed_path, True, True)
+                if result is None:
+                    continue
 
-            # self.dct_img[f_name.replace('.JPG', '')] = [A, B, D, E, C, F, iw, ih]
-            polygon_coors_m = img_frame(A, B, D, E, C, F, iw, ih)
-            polygon_coors_m.transform(tr_to_meters)
+                A, B, D, E, C, F, iw, ih = result
+                polygon_coors = img_frame(A, B, D, E, C, F, iw, ih)
 
-            # if not x_length:
-            #     flat_polygon = img_frame(A, 0, 0, E, C, F, 1, 1)
-            #     flat_polygon.transform(tr_to_meters)
-            #     x_length = round(flat_polygon.boundingBox().width(), 2) * 100
-            #     y_length = round(flat_polygon.boundingBox().height(), 2) * 100
+                r_feature = QgsFeature()
+                r_feature.setFields(new_layer_polygon.fields())
+                r_feature.setGeometry(polygon_coors)
+                new_layer_polygon.dataProvider().addFeatures([r_feature])
 
-            area_polygon = polygon_coors_m.area()
+                polygon_coors_m = img_frame(A, B, D, E, C, F, iw, ih)
+                polygon_coors_m.transform(tr_to_meters)
 
-            if all_frame:
-                frame_intersection = all_frame.intersection(polygon_coors)
+                area_polygon = polygon_coors_m.area()
 
-            for cl, type_pnt in cl_to_name.items():
-                points = cl_to_coefs[cl]
+                if all_frame:
+                    frame_intersection = all_frame.intersection(polygon_coors)
 
-                for point in points:
-                    y, x, area, volume_coef, mass_coef = point
-                    if area <= 0:
-                        continue
-                    # может быть нужно поменять x и у местами
-                    x_cor = A * x + B * y + C
-                    y_cor = D * x + E * y + F
+                for cl, type_pnt in cl_to_name.items():
+                    points = cl_to_coefs[cl]
 
-                    # centroid = polygon_coors.centroid()
-                    # x_cor, y_cor = centroid.asPoint().x(), centroid.asPoint().y()
-
-                    area = round(area_polygon * area / (iw * ih), 3)
-                    pnt = QgsGeometry().fromPointXY(QgsPointXY(x_cor, y_cor))
-                    if frame_intersection:
-                        if pnt.intersects(all_frame):
+                    for point in points:
+                        y, x, area, volume_coef, mass_coef = point
+                        if area <= 0:
                             continue
-                    r_feature = QgsFeature()
-                    r_feature.setFields(pic_coors.fields())
-                    r_feature["type"] = type_pnt
-                    r_feature["area"] = area
-                    stat_litter_area += area
-                    stat_litter_classes[type_pnt]['area'] += area
+                        x_cor = A * x + B * y + C
+                        y_cor = D * x + E * y + F
 
-                    volume = area * volume_coef
-                    mass = area * mass_coef
+                        area = round(area_polygon * area / (iw * ih), 3)
+                        pnt = QgsGeometry().fromPointXY(QgsPointXY(x_cor, y_cor))
+                        if frame_intersection:
+                            if pnt.intersects(all_frame):
+                                continue
+                        r_feature = QgsFeature()
+                        r_feature.setFields(pic_coors.fields())
+                        r_feature["type"] = type_pnt
+                        r_feature["area"] = area
+                        stat_litter_area += area
+                        stat_litter_classes[type_pnt]['area'] += area
 
-                    stat_litter_classes[type_pnt]['cnt'] += 1
-                    stat_litter_classes[type_pnt]['volume'] += volume
-                    stat_litter_classes[type_pnt]['mass'] += mass
+                        volume = area * volume_coef
+                        mass = area * mass_coef
 
-                    stat_litter_volume += volume
-                    stat_litter_mass += mass
-                    stat_litter_count += 1
+                        stat_litter_classes[type_pnt]['cnt'] += 1
+                        stat_litter_classes[type_pnt]['volume'] += volume
+                        stat_litter_classes[type_pnt]['mass'] += mass
 
-                    r_feature.setGeometry(pnt)
-                    pic_coors.dataProvider().addFeatures([r_feature])
-                    # pic_coors_heatmap.dataProvider().addFeatures([r_feature])
-            if not all_frame:
-                all_frame = polygon_coors
-            else:
-                all_frame = all_frame.combine(polygon_coors)
+                        stat_litter_volume += volume
+                        stat_litter_mass += mass
+                        stat_litter_count += 1
+
+                        r_feature.setGeometry(pnt)
+                        pic_coors.dataProvider().addFeatures([r_feature])
+
+                        # Save point data to CSV
+                        with open(csv_path, mode='a', encoding='utf-8', newline='') as csv_file:
+                            csv_writer = csv.writer(csv_file, delimiter=';')
+                            csv_writer.writerow([
+                                type_pnt,
+                                f"{y_cor:.6f}",
+                                f"{x_cor:.6f}",
+                                f"{area:.3f}",
+                                f"{volume:.3f}",
+                                f"{mass:.3f}"
+                            ])
+
+                # Upload CSV file to Yandex Storage for this image
+                access_key = 'YCAJEx_tO4BLa7mIZG8FJB00p'
+                secret_key = 'YCOIINmv-D_Nb6U53VsoBJEZ87K4eOH4ZU7mMxQm'
+                bucket_name = 'yngcook'
+                endpoint_url = 'https://storage.yandexcloud.net'
+                csv_object_name = f'arctika/garbage_points_{base_name}.csv'  # Store in arctika/ subfolder with image name
+
+                session = boto3.session.Session()
+                s3 = session.client(
+                    service_name='s3',
+                    endpoint_url=endpoint_url,
+                    aws_access_key_id=access_key,
+                    aws_secret_access_key=secret_key,
+                    region_name='ru-central1'
+                )
+
+                try:
+                    s3.upload_file(
+                        Filename=csv_path,
+                        Bucket=bucket_name,
+                        Key=csv_object_name,
+                        ExtraArgs={'ACL': 'public-read'}
+                    )
+                    print(f"Successfully uploaded {csv_object_name} to Yandex Storage")
+                except Exception as e:
+                    print(f"Error uploading CSV to Yandex Storage: {str(e)}")
+
+                if not all_frame:
+                    all_frame = polygon_coors
+                else:
+                    all_frame = all_frame.combine(polygon_coors)
+
+                processed_images += 1
+
+            except Exception as e:
+                continue
 
             step_count += step
             self.prog_bar.setValue(int(step_count))
@@ -507,47 +648,31 @@ class LitterMapDialog(QWidget):
         stat_litter_volume = round(stat_litter_volume, 2)
         stat_litter_mass = round(stat_litter_mass, 2)
 
-        centroid_polygon = all_frame.centroid().asPoint()
-        c_x, c_y = round(centroid_polygon.x(), 5), round(centroid_polygon.y(), 5)
-        all_frame.transform(tr_to_meters)
+        if processed_images == 0:
+            self.txt_area.setPlainText("Не удалось обработать ни одно изображение. Проверьте логи для деталей.")
+            return
 
-        stat_msg = ""
+        if all_frame:
+            centroid_polygon = all_frame.centroid().asPoint()
+            c_x, c_y = round(centroid_polygon.x(), 5), round(centroid_polygon.y(), 5)
+            all_frame.transform(tr_to_meters)
 
-        for cl, name in cl_to_name.items():
-            if name in stat_litter_classes:
-                stat_msg += f"{name}: количество - {stat_litter_classes[name]['cnt']},  площадь - {stat_litter_classes[name]['area']} кв.м., объём - {stat_litter_classes[name]['volume']} куб.м., масса - {stat_litter_classes[name]['mass']} кг\n"
+            stat_msg = ""
 
-        stat_msg += f"fСуммарно: количество: {stat_litter_count}, площадь: {stat_litter_area}, объём: {stat_litter_volume}, масса: {stat_litter_mass}\n"
-        stat_msg += f"Центроид участка - ({c_x}, {c_y})\n"
-        self.txt_area.setPlainText(stat_msg)
+            for cl, name in cl_to_name.items():
+                if name in stat_litter_classes:
+                    stat_msg += f"{name}: количество - {stat_litter_classes[name]['cnt']},  площадь - {stat_litter_classes[name]['area']} кв.м., объём - {stat_litter_classes[name]['volume']} куб.м., масса - {stat_litter_classes[name]['mass']} кг\n"
 
-        # self.stat_data = [
-        #     ['Тип мусора', 'Количество, ед.', 'Площадь, кв.м.']
-        # ]
-        # for cl in cl_to_name.keys():
-        #
-        # self.stat_data = [
-        #     ['Тип мусора', 'Количество, ед.', 'Площадь, кв.м.'],
-        #     ['железо', stat_litter_classes['железо']['num'], stat_litter_classes['железо']['area']],
-        #     ['рыболовные снасти', stat_litter_classes['рыболовные снасти']['num'],
-        #      stat_litter_classes['рыболовные снасти']['area']],
-        #     ['пластик', stat_litter_classes['пластик']['num'], stat_litter_classes['пластик']['area']],
-        #     ['дерево', stat_litter_classes['дерево']['num'], stat_litter_classes['дерево']['area']],
-        #     ['бетон', stat_litter_classes['бетон']['num'], stat_litter_classes['бетон']['area']],
-        #     ['резина', stat_litter_classes['резина']['num'], stat_litter_classes['резина']['area']],
-        #     ['Итого', '', ''],
-        #     ["Общее количество мусора, ед.", stat_litter_count, ''],
-        #     ["Общая площадь мусора, кв. м.", stat_litter_area, ''],
-        #     ["Общая площадь участка, кв. м.", round(all_frame.area(), 2), ''],
-        #     ["Центроид участка", '({}, {})'.format(c_x, c_y), ''],
-        #     ["Пространственное разрешение, см", '{} x {}'.format(x_length, y_length), '']
-        # ]
+            stat_msg += f"Суммарно: количество: {stat_litter_count}, площадь: {stat_litter_area}, объём: {stat_litter_volume}, масса: {stat_litter_mass}\n"
+            stat_msg += f"Центроид участка - ({c_x}, {c_y})\n"
+            stat_msg += f"Успешно обработано изображений: {processed_images} из {len(images)}"
+            self.txt_area.setPlainText(stat_msg)
 
-        QgsProject.instance().addMapLayer(pic_coors)
-        # QgsProject.instance().addMapLayer(pic_coors_heatmap)
-        pic_coors.loadNamedStyle(classes_style)
-        # pic_coors_heatmap.loadNamedStyle(heatmap_style)
-        # self.btn_save_stat.setDisabled(False)
+            QgsProject.instance().addMapLayer(pic_coors)
+            pic_coors.loadNamedStyle(classes_style)
+        else:
+            self.txt_area.setPlainText("Не удалось обработать ни одно изображение. Проверьте логи для деталей.")
+
         self.prog_bar.setValue(0)
 
 # app = LitterMapDialog()
