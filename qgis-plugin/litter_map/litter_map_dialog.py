@@ -20,6 +20,22 @@
  *   (at your option) any later version.                                   *
  *                                                                         *
  ***************************************************************************/
+
+This module implements a QGIS plugin for processing and analyzing UAV (drone) imagery
+to detect and map litter/garbage. The plugin provides functionality for:
+
+1. Georeferencing UAV images using EXIF metadata
+2. Processing images through AI models for litter detection
+3. Creating and managing vector layers for litter mapping
+4. Calculating statistics and generating reports
+5. Managing AWS S3 storage for processed images
+6. Creating heatmaps of litter distribution
+
+The plugin uses various geospatial libraries and tools including:
+- QGIS for map visualization and layer management
+- GDAL for geospatial data processing
+- ExifTool for extracting image metadata
+- AWS S3 for cloud storage
 """
 
 import os
@@ -40,6 +56,16 @@ from osgeo import gdal, osr
 import sys
 
 from .exiftool_custom import ExifToolHelper
+from .config import (
+    YANDEX_STORAGE_ACCESS_KEY,
+    YANDEX_STORAGE_SECRET_KEY,
+    YANDEX_STORAGE_BUCKET_NAME,
+    YANDEX_STORAGE_ENDPOINT_URL,
+    YANDEX_API_KEY,
+    YANDEX_FOLDER_ID,
+    YANDEX_NODE_ALIAS,
+    YANDEX_API_URL
+)
 
 import requests
 import ast
@@ -66,9 +92,18 @@ current_folder = os.path.dirname(os.path.realpath(__file__))
 classes_style = os.path.join(current_folder, r"classes_style.qml")
 heatmap_style = os.path.join(current_folder, r"heatmap_style.qml")
 exiftool_exe = os.path.join(current_folder, r"tools\exiftool.exe")
-#exiftool_exe = r"C:\Users\Administrator\Desktop\garbage-detection-dev\qgis-plugin\litter_map\tools\exiftool.exe"
 
 def extract_polygon(coors, coef_data):
+    """
+    Extract a polygon from coordinates using transformation coefficients.
+
+    Args:
+        coors (list): List of coordinate pairs (y, x)
+        coef_data (list): List of transformation coefficients [A, B, D, E, C, F]
+
+    Returns:
+        tuple: (x, y) coordinates of the polygon centroid
+    """
     A, B, D, E, C, F = coef_data
     points = []
     for coor in coors:
@@ -82,27 +117,65 @@ def extract_polygon(coors, coef_data):
 
 
 def meter2Degree(latitude, x_length, y_length):
-    # convert meter values to degrees
+    """
+    Convert distances from meters to degrees.
+
+    Args:
+        latitude (float): Latitude in degrees
+        x_length (float): Distance in meters along x-axis
+        y_length (float): Distance in meters along y-axis
+
+    Returns:
+        tuple: (x_length_degrees, y_length_degrees)
+    """
     x_length = x_length / (111320 * math.cos(math.radians(latitude)))
     y_length = y_length / 110540
     return x_length, y_length
 
 
 def angle_bearing(x_one, y_one, x_two, y_two):
-    # calculate azimuth angle
+    """
+    Calculate the azimuth angle between two points.
+
+    Args:
+        x_one (float): X coordinate of first point
+        y_one (float): Y coordinate of first point
+        x_two (float): X coordinate of second point
+        y_two (float): Y coordinate of second point
+
+    Returns:
+        float: Azimuth angle in degrees (0-360)
+    """
     angle = math.degrees(math.atan2(y_two - y_one, x_two - x_one))
     return (90 - angle) % 360
 
 
 def distance_pp(pnt_one, pnt_two):
-    # distance between two points
+    """
+    Calculate the Euclidean distance between two points.
+
+    Args:
+        pnt_one (tuple): (x, y) coordinates of first point
+        pnt_two (tuple): (x, y) coordinates of second point
+
+    Returns:
+        float: Distance between points
+    """
     x_start, y_start = pnt_one
     x_end, y_end = pnt_two
     return math.sqrt((x_end - x_start) ** 2 + (y_end - y_start) ** 2)
 
 
 def delete_tech_layers(list_layers_to_delete):
-    # delete layers by names
+    """
+    Delete specified layers from the QGIS project.
+
+    Args:
+        list_layers_to_delete (list): List of layer names to delete
+
+    Returns:
+        None
+    """
     for name in list_layers_to_delete:
         if len(QgsProject.instance().mapLayersByName(name)) > 0:
             ds = QgsProject.instance().mapLayersByName(name)[0]
@@ -111,7 +184,16 @@ def delete_tech_layers(list_layers_to_delete):
 
 
 def add_tech_layer(name, type_geometry):
-    # add temporary layer
+    """
+    Create a new temporary vector layer in QGIS.
+
+    Args:
+        name (str): Name for the new layer
+        type_geometry (str): Geometry type (e.g., "Point", "Polygon")
+
+    Returns:
+        QgsVectorLayer: The newly created layer
+    """
     delete_tech_layers([name])
     iface.mainWindow().blockSignals(True)
     tech_layer = QgsVectorLayer(type_geometry, name, "memory")
@@ -124,6 +206,17 @@ def add_tech_layer(name, type_geometry):
 
 
 def img_frame(A, B, D, E, C, F, iw, ih):
+    """
+    Create a polygon geometry representing an image frame.
+
+    Args:
+        A, B, D, E, C, F (float): Transformation coefficients
+        iw (float): Image width
+        ih (float): Image height
+
+    Returns:
+        QgsGeometry: Polygon geometry representing the image frame
+    """
     x_one = C
     y_one = F
     x_two = A * iw + B * 0 + x_one
@@ -144,6 +237,22 @@ def img_frame(A, B, D, E, C, F, iw, ih):
 
 
 def get_corner_points(center_lon, center_lat, altitude, dir_angle, pitch, aspect, sensor_width, focal_length):
+    """
+    Calculate the corner points of an image based on camera parameters.
+
+    Args:
+        center_lon (float): Center longitude
+        center_lat (float): Center latitude
+        altitude (float): Camera altitude
+        dir_angle (float): Direction angle
+        pitch (float): Camera pitch angle
+        aspect (float): Image aspect ratio
+        sensor_width (float): Camera sensor width
+        focal_length (float): Camera focal length
+
+    Returns:
+        list: List of QgsGeometry points representing the image corners
+    """
     # get corner points of image
     # calculations based on photogrammetry tutorial
     ratXh = sensor_width / focal_length / 2  # ratio of sensor half-width to focal length (at image centre)
@@ -206,6 +315,18 @@ def get_corner_points(center_lon, center_lat, altitude, dir_angle, pitch, aspect
 
 
 def georeference_img(file_in, processed_path, add_points, add_raster):
+    """
+    Georeference an image using its EXIF metadata.
+
+    Args:
+        file_in (str): Path to input image file
+        processed_path (str): Path where processed image will be saved
+        add_points (bool): Whether to add control points
+        add_raster (bool): Whether to add the raster to QGIS
+
+    Returns:
+        bool: True if successful, False otherwise
+    """
     try:
         file_jgw = os.path.join(os.path.dirname(processed_path), os.path.basename(processed_path).replace('JPG', 'jgw'))
 
@@ -366,7 +487,24 @@ def georeference_img(file_in, processed_path, add_points, add_raster):
 
 
 class LitterMapDialog(QWidget):
+    """
+    Main dialog class for the Litter Map QGIS plugin.
+    
+    This class implements the user interface and core functionality for:
+    - Loading and processing UAV images
+    - Managing AWS S3 storage
+    - Creating and managing vector layers
+    - Generating statistics and reports
+    - Creating heatmaps
+    """
+
     def __init__(self, parent=None):
+        """
+        Initialize the LitterMapDialog.
+
+        Args:
+            parent (QWidget, optional): Parent widget. Defaults to None.
+        """
         # set interface and variables
         super().__init__(parent)
 
@@ -405,6 +543,12 @@ class LitterMapDialog(QWidget):
         self.show()
 
     def save_stat(self):
+        """
+        Save statistics to a file.
+        
+        This method saves the current statistics to a JSON file in the
+        specified output directory.
+        """
         out_file = QFileDialog.getSaveFileName(None, "Сохранить статистику", "", "CSV (*.csv)")
         if out_file[0]:
             with open(out_file[0], mode='w', encoding='cp1251', newline='') as stat_file:
@@ -415,6 +559,12 @@ class LitterMapDialog(QWidget):
             self.warning_message('Статистика записана в файл {}'.format(out_file[0]))
 
     def warning_message(self, err_text):
+        """
+        Display a warning message to the user.
+
+        Args:
+            err_text (str): Text of the warning message
+        """
         # message box
 
         msg = QMessageBox()
@@ -422,11 +572,21 @@ class LitterMapDialog(QWidget):
         return
 
     def process_image(self, image_path, processed_dir_path):
-        url = "https://node-api.datasphere.yandexcloud.net/process"
+        """
+        Process a single image through the AI model.
+
+        Args:
+            image_path (str): Path to the input image
+            processed_dir_path (str): Directory where processed images will be saved
+
+        Returns:
+            bool: True if processing was successful, False otherwise
+        """
+        url = YANDEX_API_URL
         headers = {
-            "x-node-alias": "datasphere.user.segmentation-backend",
-            "Authorization": "Api-Key AQVN1vLuEmspghqfLIBxf2nmNDzctez-kjrrxKdx",
-            "x-folder-id": "b1gbm9skjpv4gt0r8dmi",
+            "x-node-alias": YANDEX_NODE_ALIAS,
+            "Authorization": f"Api-Key {YANDEX_API_KEY}",
+            "x-folder-id": YANDEX_FOLDER_ID,
         }
         response = requests.post(url, headers=headers, files={"image": open(image_path, 'rb')})
         processed_path = ""
@@ -441,25 +601,21 @@ class LitterMapDialog(QWidget):
             save_file.close()
 
             # Upload to Yandex Storage
-            access_key = 'YCAJEx_tO4BLa7mIZG8FJB00p'
-            secret_key = 'YCOIINmv-D_Nb6U53VsoBJEZ87K4eOH4ZU7mMxQm'
-            bucket_name = 'yngcook'
-            endpoint_url = 'https://storage.yandexcloud.net'
-            object_name = f'arctika_photos/{base_name}'  # Store in processed/ subfolder
-
             session = boto3.session.Session()
             s3 = session.client(
                 service_name='s3',
-                endpoint_url=endpoint_url,
-                aws_access_key_id=access_key,
-                aws_secret_access_key=secret_key,
+                endpoint_url=YANDEX_STORAGE_ENDPOINT_URL,
+                aws_access_key_id=YANDEX_STORAGE_ACCESS_KEY,
+                aws_secret_access_key=YANDEX_STORAGE_SECRET_KEY,
                 region_name='ru-central1'
             )
+
+            object_name = f'arctika_photos/{base_name}'
 
             try:
                 s3.upload_file(
                     Filename=processed_path,
-                    Bucket=bucket_name,
+                    Bucket=YANDEX_STORAGE_BUCKET_NAME,
                     Key=object_name,
                     ExtraArgs={'ACL': 'public-read'}
                 )
@@ -472,6 +628,12 @@ class LitterMapDialog(QWidget):
         return processed_path, cl_coefs
 
     def load_images(self):
+        """
+        Load images from the selected directory.
+        
+        This method scans the selected directory for images and populates
+        the image list widget with the found images.
+        """
         images = QFileDialog.getOpenFileNames(self, 'Загрузить изображения', None, "Image files (*.jpg)")[0]
         if not images:
             return
@@ -599,25 +761,21 @@ class LitterMapDialog(QWidget):
                             ])
 
                 # Upload CSV file to Yandex Storage for this image
-                access_key = 'YCAJEx_tO4BLa7mIZG8FJB00p'
-                secret_key = 'YCOIINmv-D_Nb6U53VsoBJEZ87K4eOH4ZU7mMxQm'
-                bucket_name = 'yngcook'
-                endpoint_url = 'https://storage.yandexcloud.net'
-                csv_object_name = f'arctika/garbage_points_{base_name}.csv'  # Store in arctika/ subfolder with image name
-
                 session = boto3.session.Session()
                 s3 = session.client(
                     service_name='s3',
-                    endpoint_url=endpoint_url,
-                    aws_access_key_id=access_key,
-                    aws_secret_access_key=secret_key,
+                    endpoint_url=YANDEX_STORAGE_ENDPOINT_URL,
+                    aws_access_key_id=YANDEX_STORAGE_ACCESS_KEY,
+                    aws_secret_access_key=YANDEX_STORAGE_SECRET_KEY,
                     region_name='ru-central1'
                 )
+
+                csv_object_name = f'arctika/garbage_points_{base_name}.csv'  # Store in arctika/ subfolder with image name
 
                 try:
                     s3.upload_file(
                         Filename=csv_path,
-                        Bucket=bucket_name,
+                        Bucket=YANDEX_STORAGE_BUCKET_NAME,
                         Key=csv_object_name,
                         ExtraArgs={'ACL': 'public-read'}
                     )

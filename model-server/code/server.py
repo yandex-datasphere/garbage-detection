@@ -1,3 +1,30 @@
+"""
+Server for garbage detection in UAV images using deep learning.
+
+This module implements a Flask server that provides an API for processing images
+to detect and classify different types of garbage/litter. The server uses a
+Segformer model for semantic segmentation to identify various types of waste.
+
+Features:
+- Image upload and processing
+- Semantic segmentation using Segformer model
+- Support for multiple garbage types (iron, fishing gear, plastic, etc.)
+- Automatic cleanup of temporary files
+- Thread-safe processing using mutex locks
+
+The server provides two main endpoints:
+- /hello: Health check endpoint
+- /process: Main endpoint for image processing
+
+Dependencies:
+- Flask: Web framework
+- PyTorch: Deep learning framework
+- Transformers: Hugging Face transformers library
+- PIL: Python Imaging Library
+- NumPy: Numerical computing library
+- scikit-image: Image processing library
+"""
+
 import glob
 import json
 import traceback
@@ -16,8 +43,10 @@ import os
 from flask import Flask, flash, request, redirect, send_file, Response
 from threading import Lock
 
+# Global mutex for thread-safe operations
 mutex = Lock()
 
+# Configuration constants
 UPLOAD_FOLDER = './uploaded'
 PROCESSED_FOLDER = './processed'
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg'}
@@ -28,12 +57,36 @@ app.config['PROCESSED_FOLDER'] = PROCESSED_FOLDER
 
 
 def allowed_file(filename):
+    """
+    Check if the file extension is allowed.
+
+    Args:
+        filename (str): Name of the file to check
+
+    Returns:
+        bool: True if the file extension is allowed, False otherwise
+    """
     return '.' in filename and \
            filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
 class NpEncoder(json.JSONEncoder):
+    """
+    Custom JSON encoder for NumPy types.
+    
+    This class extends the default JSON encoder to handle NumPy-specific data types
+    (integers, floats, and arrays) by converting them to Python native types.
+    """
     def default(self, obj):
+        """
+        Convert NumPy types to Python native types.
+
+        Args:
+            obj: Object to encode
+
+        Returns:
+            Python native type equivalent of the input object
+        """
         if isinstance(obj, np.integer):
             return int(obj)
         if isinstance(obj, np.floating):
@@ -45,6 +98,12 @@ class NpEncoder(json.JSONEncoder):
 
 @app.route("/hello", methods=['GET', 'POST'])
 def hello():
+    """
+    Health check endpoint.
+    
+    Returns:
+        str: "hello" message
+    """
     upload_path = os.path.join(app.config['UPLOAD_FOLDER'], "lol")
     print(upload_path)
     return "hello"
@@ -52,6 +111,16 @@ def hello():
 
 @app.route("/process", methods=['POST'])
 def process():
+    """
+    Main endpoint for processing images.
+    
+    Accepts POST requests with an image file and returns:
+    - Processed image with segmentation overlay
+    - Coefficients for detected garbage objects in cookies
+    
+    Returns:
+        Response: Processed image file with segmentation overlay
+    """
     print("Start processing image")
 
     if 'image' not in request.files:
@@ -78,7 +147,6 @@ def process():
 
     with mutex:
         im.save(process_path)
-        # os.remove(upload_path)
         response = send_file(
             os.path.join(app.config['PROCESSED_FOLDER'], file.filename),
             mimetype='image/jpg'
@@ -87,9 +155,11 @@ def process():
         return response
 
 
+# Model configuration
 MODEL_CHECKPOINT = 'nvidia/mit-b2'
 model_path = "model.pt"
 
+# Label mappings for different types of garbage
 id2label = {
     0: "background",
     1: "iron",
@@ -100,6 +170,7 @@ id2label = {
     6: "rubber"
 }
 
+# Russian names for garbage types
 cl_to_name = {
     1: "железо",
     2: "рыболовные снасти",
@@ -109,11 +180,13 @@ cl_to_name = {
     6: "резина"
 }
 
+# Color palette for visualization
 palette = {1: [255, 255, 255], 2: [0, 255, 255], 3: [0, 255, 0], 4: [255, 0, 0], 5: [255, 0, 255], 6: [255, 255, 0]}
 
 label2id = {v: k for k, v in id2label.items()}
 id2color = {x: y for x, y in palette.items()}
 
+# Initialize model and processor
 image_processor = SegformerImageProcessor.from_pretrained(MODEL_CHECKPOINT)
 image_processor.do_reduce_labels = False
 image_processor.reduce_labels = False
@@ -130,39 +203,18 @@ loaded_model.load_state_dict(torch.load(model_path, map_location=device))
 loaded_model = loaded_model.to(device)
 
 
-# Параллельное предсказание, работает только на больших GPU
-# def predict(batch):
-#     images = []
-#     for image in batch:
-#         images.append(Image.fromarray(image))
-#
-#     encoding = image_processor(images, return_tensors="pt")
-#     pixel_values = encoding.pixel_values.to(device)
-#     outputs = loaded_model(pixel_values=pixel_values)
-#
-#     logits = outputs.logits.cpu()
-#
-#     # First, rescale logits to original image size
-#     upsampled_logits = nn.functional.interpolate(logits,
-#                                                  size=images[0].size[::-1],  # (height, width)
-#                                                  mode='bilinear',
-#                                                  align_corners=False)
-#     batch_seg = upsampled_logits.argmax(dim=1)
-#     batch_images = []
-#
-#     for i, seg in enumerate(batch_seg):
-#         color_seg = np.zeros((seg.shape[0], seg.shape[1], 3), dtype=np.uint8)  # height, width, 3
-#         for label, color in id2color.items():
-#             color_seg[seg == label, :] = color
-#
-#         img = batch[i] * 0.7 + color_seg * 0.3
-#         img = img.astype(np.uint8)
-#         batch_images.append(img)
-#
-#     return batch_seg, batch_images
-
-#
 def predict(batch):
+    """
+    Process a batch of images through the model.
+
+    Args:
+        batch (list): List of numpy arrays representing images
+
+    Returns:
+        tuple: (batch_seg, batch_images)
+            - batch_seg: List of segmentation masks
+            - batch_images: List of processed images with segmentation overlay
+    """
     images = []
     for image in batch:
         images.append(Image.fromarray(image))
@@ -197,9 +249,23 @@ def predict(batch):
 
 
 def predict_full(image, h=512, w=512, stride=512):
+    """
+    Process a full-size image by splitting it into patches.
+
+    Args:
+        image (PIL.Image): Input image to process
+        h (int): Height of patches
+        w (int): Width of patches
+        stride (int): Stride for patch extraction
+
+    Returns:
+        tuple: (res_image, res_mask, cl_coefs)
+            - res_image: Processed image with segmentation overlay
+            - res_mask: Full segmentation mask
+            - cl_coefs: Coefficients for detected objects
+    """
     arr = np.array(image)
     img = arr
-    # img = arr[:define_nearest_crop(arr.shape[0]), :define_nearest_crop(arr.shape[1]), ...]
 
     height = img.shape[0]
     width = img.shape[1]
@@ -264,56 +330,76 @@ def predict_full(image, h=512, w=512, stride=512):
     return res_image, res_mask, cl_coefs
 
 
+# Coefficients for different garbage types
 cl_to_max_window = {
-    1: 2,
-    2: 2,
-    3: 2,
-    4: 4,
-    5: 6,
-    6: 3,
+    1: 2,  # iron
+    2: 2,  # fishing gear
+    3: 2,  # plastic
+    4: 4,  # tree
+    5: 6,  # concrete
+    6: 3,  # rubber
 }
 
 cl_to_volume_decreasing_coef = {
-    1: 0.025,
-    2: 0.125,
-    3: 0.1,
-    4: 0.125,
-    5: 0.5,
-    6: 0.05,
-}
-
-cl_to_name = {
-    1: "железо",
-    2: "рыболовные снасти",
-    3: "пластик",
-    4: "дерево",
-    5: "бетон",
-    6: "резина"
+    1: 0.025,  # iron
+    2: 0.125,  # fishing gear
+    3: 0.1,    # plastic
+    4: 0.125,  # tree
+    5: 0.5,    # concrete
+    6: 0.05,   # rubber
 }
 
 cl_to_density = {
-    1: 2000,
-    2: 100,
-    3: 100,  # может быть и легче, но мне кажется, что он обычно моркый и тяжелый
-    4: 200,
-    5: 700,
-    6: 700,
+    1: 2000,  # iron (kg/m³)
+    2: 100,   # fishing gear
+    3: 100,   # plastic (wet)
+    4: 200,   # tree
+    5: 700,   # concrete
+    6: 700,   # rubber
 }
 
 
 def strided4D_v2(arr, arr2, s):
+    """
+    Create a 4D view of the array with strides.
+
+    Args:
+        arr (np.ndarray): Input array
+        arr2 (np.ndarray): Second array
+        s (tuple): Stride size
+
+    Returns:
+        np.ndarray: 4D view of the array
+    """
     return view_as_windows(arr, arr2.shape, step=s)
 
 
 def stride_conv_strided(arr, arr2, s):
+    """
+    Perform strided convolution.
+
+    Args:
+        arr (np.ndarray): Input array
+        arr2 (np.ndarray): Kernel array
+        s (tuple): Stride size
+
+    Returns:
+        np.ndarray: Result of strided convolution
+    """
     arr4D = strided4D_v2(arr, arr2, s=s)
     return np.tensordot(arr4D, arr2, axes=((2, 3), (0, 1)))
 
 
 def separate_objects_masks(mask):
     """
-    mask: должна содержать только значиния 0 и 255,
-    h x w x 3, все 3 канала одинаково заполнены
+    Separate individual objects in a binary mask.
+
+    Args:
+        mask (np.ndarray): Binary mask containing only values 0 and 255,
+                          h x w x 3, all 3 channels are identical
+
+    Returns:
+        list: List of individual object masks
     """
     res = []
 
@@ -328,6 +414,16 @@ def separate_objects_masks(mask):
 
 
 def calc_coefs(mask, cl):
+    """
+    Calculate coefficients for detected objects.
+
+    Args:
+        mask (np.ndarray): Binary mask of detected objects
+        cl (int): Class label
+
+    Returns:
+        list: List of coefficients for each detected object
+    """
     coefs = []
     cl_mask = mask == cl
 
@@ -371,6 +467,12 @@ def calc_coefs(mask, cl):
 
 
 def delete_files_in_dir(path):
+    """
+    Delete all files in a directory.
+
+    Args:
+        path (str): Path to directory
+    """
     try:
         files = glob.glob(os.path.join(path, '*'))
         for file in files:
@@ -382,6 +484,9 @@ def delete_files_in_dir(path):
 
 
 def clear_dirs():
+    """
+    Clear temporary directories.
+    """
     with mutex:
         delete_files_in_dir(app.config['PROCESSED_FOLDER'])
 
