@@ -24,6 +24,13 @@
 * [Код сервера для запуска модели сегментации в облаке](model-server/README.md)
 * [Плагин для QGIS](qgis-plugin/litter_map)
 
+Другие инструменты, разработанные в рамках проекта:
+* [Облачный инструмент для разметки датасета с помощью кликовой сегментации](https://gitlab.com/combat_helicopter/clicksegmenter_cloud_version)
+* [Генератор синтетичесого датасета на основе StarGAN V2](https://gitlab.com/combat_helicopter/stargan-v2-masked-generation)
+* [Генератор синтетического датасета на основе преобразования Фурье и пирамид Лапласа](https://gitlab.com/combat_helicopter/laplaciangenerator)
+* Авторазметка стилей: [1](https://gitlab.com/combat_helicopter/automaticstylemarking),
+[2](https://gitlab.com/combat_helicopter/maskedautomaticstylemarking)
+
 Сама обученная модель сегментации мусора находится [здесь](https://storage.yandexcloud.net/socialtech/garbage-detect/seg-model/model.pt).
 
 > В рамках проекта мы не предоставляем датасет, на котором была обучена модель, из-за лицензионных ограничений. Посмотреть на пример данных, на которых была обучена модель, вы можете в [публичном дашбоарде Yandex Datalens](https://datalens.yandex/osp1sv4o5f4ca). Вы можете использовать [обученную в рамках проекта модель сегментации](https://storage.yandexcloud.net/socialtech/garbage-detect/seg-model/model.pt) на своих данных ([пример](example/run_model.ipynb)). Если же вы хотите обучить модель на своём датасете - используйте код из директории [`model-training`](model-training)
