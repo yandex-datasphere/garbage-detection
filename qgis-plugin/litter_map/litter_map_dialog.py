@@ -569,9 +569,9 @@ class LitterMapDialog(QWidget):
         self.txt_area.setPlainText(stat_msg)
 
         # Upload CSV file to Yandex Storage
-        access_key = 'YCAJEx_tO4BLa7mIZG8FJB00p'
-        secret_key = 'YCOIINmv-D_Nb6U53VsoBJEZ87K4eOH4ZU7mMxQm'
-        bucket_name = 'yngcook'
+        access_key = 'YOUR_ACCESS_KEY'
+        secret_key = 'YOUR_SECRET_KEY'
+        bucket_name = 'YOUR_BUCKET_NAME'
         endpoint_url = 'https://storage.yandexcloud.net'
         csv_object_name = f'data/garbage_points.csv'  # Store in data/ subfolder
 
