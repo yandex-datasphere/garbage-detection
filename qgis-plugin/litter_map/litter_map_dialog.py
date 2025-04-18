@@ -374,9 +374,9 @@ class LitterMapDialog(QWidget):
             save_file.close()
 
             # Upload to Yandex Storage
-            access_key = 'YCAJEx_tO4BLa7mIZG8FJB00p'
-            secret_key = 'YCOIINmv-D_Nb6U53VsoBJEZ87K4eOH4ZU7mMxQm'
-            bucket_name = 'yngcook'
+            access_key = 'YOUR_ACCESS_KEY'
+            secret_key = 'YOUR_SECRET_KEY'
+            bucket_name = 'YOUR_BUCKET_NAME'
             endpoint_url = 'https://storage.yandexcloud.net'
             object_name = f'processed/{base_name}'  # Store in processed/ subfolder
 
